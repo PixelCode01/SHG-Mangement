@@ -1,0 +1,134 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run Development Server",
+			"type": "shell",
+			"command": "npm run dev",
+			"isBackground": true,
+			"group": "build",
+			"problemMatcher": []
+		},
+		{
+			"label": "Run Complete Workflow Test",
+			"type": "shell",
+			"command": "node test-complete-workflow.js",
+			"group": "test",
+			"problemMatcher": []
+		},
+		{
+			"label": "Run Standing Calculation Test",
+			"type": "shell",
+			"command": "node test-standing-calculation.js",
+			"group": "test",
+			"problemMatcher": []
+		},
+		{
+			"label": "Full End-to-End Test - Account/Group/Contribution/Period",
+			"type": "shell",
+			"command": "node test-standing-calculation.js",
+			"group": "test",
+			"problemMatcher": [],
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "new",
+				"showReuseMessage": true,
+				"clear": false
+			}
+		},
+		{
+			"label": "Test Period Closing with Debug Logs",
+			"type": "shell",
+			"command": "node test-period-closing-with-logs.js",
+			"group": "test",
+			"problemMatcher": [],
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "new",
+				"showReuseMessage": true,
+				"clear": false
+			}
+		},
+		{
+			"label": "Analyze Standing Discrepancy",
+			"type": "shell",
+			"command": "node analyze-standing-discrepancy.js",
+			"group": "test",
+			"problemMatcher": [],
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "new",
+				"showReuseMessage": true,
+				"clear": false
+			}
+		},
+		{
+			"label": "Fix Standing Calculations",
+			"type": "shell",
+			"command": "node fix-standing-calculations.js",
+			"group": "test",
+			"problemMatcher": [],
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": false,
+				"panel": "new",
+				"showReuseMessage": true,
+				"clear": false
+			}
+		},
+		{
+			"label": "Automated PDF Import Fix and Test",
+			"type": "shell",
+			"command": "node automated-pdf-fix-node.js",
+			"group": "test",
+			"problemMatcher": [],
+			"isBackground": false,
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "new",
+				"showReuseMessage": false,
+				"clear": true
+			}
+		},
+		{
+			"label": "Deploy PDF Fix Now",
+			"type": "shell",
+			"command": "node deploy-pdf-fix-now.js",
+			"group": "build",
+			"problemMatcher": [],
+			"isBackground": false,
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "new",
+				"showReuseMessage": false,
+				"clear": true
+			}
+		},
+		{
+			"label": "Fully Automated PDF Import Test",
+			"type": "shell",
+			"command": "node automated-browser-pdf-test.js",
+			"group": "test",
+			"problemMatcher": [],
+			"presentation": {
+				"echo": true,
+				"reveal": "always",
+				"focus": true,
+				"panel": "new",
+				"showReuseMessage": false,
+				"clear": true
+			}
+		}
+	]
+}

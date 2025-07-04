@@ -1,0 +1,309 @@
+import { NextResponse } from 'next/server';
+import { prisma } from '@/app/lib/prisma'; 
+import { z } from 'zod';
+import type { Prisma } from '@prisma/client';
+
+// Validation schema for creating a GroupPeriodicRecord
+const groupPeriodicRecordSchema = z.object({
+  meetingDate: z.string().datetime(),
+  recordSequenceNumber: z.number().int().positive().optional().nullable(),
+  totalCollectionThisPeriod: z.number().optional().nullable(),
+  standingAtStartOfPeriod: z.number().optional().nullable(),
+  cashInBankAtEndOfPeriod: z.number().optional().nullable(),
+  cashInHandAtEndOfPeriod: z.number().optional().nullable(),
+  expensesThisPeriod: z.number().optional().nullable(),
+  totalGroupStandingAtEndOfPeriod: z.number().optional().nullable(),
+  interestEarnedThisPeriod: z.number().optional().nullable(),
+  newContributionsThisPeriod: z.number().optional().nullable(),
+  loanProcessingFeesCollectedThisPeriod: z.number().optional().nullable(),
+  lateFinesCollectedThisPeriod: z.number().optional().nullable(),
+  newMembersJoinedThisPeriod: z.number().int().nonnegative().optional().nullable(),
+  sharePerMemberThisPeriod: z.number().nonnegative().optional().nullable(),
+  memberRecords: z.array(z.object({
+    memberId: z.string(),
+    memberName: z.string().optional(), // Added for convenience, not stored in DB directly here
+    compulsoryContribution: z.number().optional().nullable(),
+    loanRepaymentPrincipal: z.number().optional().nullable(),
+    lateFinePaid: z.number().optional().nullable(),
+  })).optional(),
+});
+
+// POST /api/groups/{groupId}/periodic-records
+export async function POST(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id: idFromParams } = await params; 
+  if (!idFromParams) {
+    return NextResponse.json({ error: 'Group ID is required' }, { status: 400 });
+  }
+
+  // Regular expression to check if a string is a valid MongoDB ObjectId
+  // An ObjectId is a 24-character hexadecimal string.
+  const objectIdRegex = /^[0-9a-fA-F]{24}$/;
+
+  try {
+    let group;
+    if (objectIdRegex.test(idFromParams)) {
+      // If idFromParams looks like an ObjectId, try finding by id first
+      group = await prisma.group.findUnique({
+        where: { id: idFromParams },
+      });
+    } else {
+      // If idFromParams doesn't look like an ObjectId, try finding by name
+      group = await prisma.group.findFirst({
+        where: { name: idFromParams },
+      });
+    }
+
+    if (!group) {
+      return NextResponse.json({ error: 'Group not found' }, { status: 404 });
+    }
+
+    const actualGroupId = group.id;
+
+    const body = await request.json();
+    const validationResult = groupPeriodicRecordSchema.safeParse(body);
+
+    if (!validationResult.success) {
+      console.error("Validation errors:", validationResult.error.errors);
+      return NextResponse.json(
+        { error: 'Validation failed', details: validationResult.error.errors },
+        { status: 400 }
+      );
+    }
+
+    const periodicData = validationResult.data;
+    
+    console.log("Creating periodic record with data:", JSON.stringify({
+      groupId: actualGroupId,
+      meetingDate: periodicData.meetingDate,
+      newContributionsThisPeriod_client: periodicData.newContributionsThisPeriod
+    }, null, 2));
+
+    const newRecord = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const newMeetingDate = new Date(periodicData.meetingDate);
+      
+      // Get latest record to determine sequence number and starting standing
+      const latestRecord = await tx.groupPeriodicRecord.findFirst({
+        where: { groupId: actualGroupId },
+        orderBy: [
+          { meetingDate: 'desc' },
+          { createdAt: 'desc' }
+        ]
+      });
+
+      let nextRecordSequenceNumber = 1;
+      let standingAtStartOfPeriod = 0;
+
+      if (latestRecord) {
+        nextRecordSequenceNumber = (latestRecord.recordSequenceNumber || 0) + 1;
+        standingAtStartOfPeriod = latestRecord.totalGroupStandingAtEndOfPeriod || 0;
+      }
+
+      // Get current period data for calculations
+      const currentPeriodData = await tx.memberContribution.findMany({
+        where: {
+          groupId: actualGroupId,
+          contributionDate: {
+            gte: newMeetingDate,
+            lt: new Date(newMeetingDate.getTime() + 24 * 60 * 60 * 1000) // Next day
+          }
+        },
+        include: {
+          member: true,
+          membership: true
+        }
+      });
+
+      // Calculate current period contributions
+      const currentPeriodContributions = currentPeriodData.reduce(
+        (sum, contribution) => sum + (contribution.contributionAmount || 0), 0
+      );
+
+      // Calculate current period late fines
+      const currentPeriodLateFines = currentPeriodData.reduce(
+        (sum, contribution) => sum + (contribution.lateFineAmount || 0), 0
+      );
+
+      // Get all active loans for the group to calculate total loan assets
+      const activeLoans = await tx.loan.findMany({
+        where: {
+          groupId: actualGroupId,
+          status: 'ACTIVE'
+        }
+      });
+
+      const totalLoanAssets = activeLoans.reduce(
+        (sum, loan) => sum + (loan.currentBalance || 0), 0
+      );
+
+      // Calculate cash balances
+      const cashInHand = periodicData.cashInHandAtEndOfPeriod || 0;
+      const cashInBank = periodicData.cashInBankAtEndOfPeriod || 0;
+      const totalCash = cashInHand + cashInBank;
+
+      // Calculate total group standing using the correct formula:
+      // Total Standing = Cash in Hand + Cash in Bank + Total Loan Assets
+      const totalGroupStandingAtEndOfPeriod = totalCash + totalLoanAssets;
+
+      console.log(`Calculating total standing: Cash(${totalCash}) + Loans(${totalLoanAssets}) = ${totalGroupStandingAtEndOfPeriod}`);
+
+      // Create the periodic record
+      const dataForCreate: Prisma.GroupPeriodicRecordUncheckedCreateInput = {
+        groupId: actualGroupId,
+        meetingDate: newMeetingDate,
+        recordSequenceNumber: nextRecordSequenceNumber,
+        standingAtStartOfPeriod: standingAtStartOfPeriod,
+        totalGroupStandingAtEndOfPeriod: totalGroupStandingAtEndOfPeriod,
+        newContributionsThisPeriod: currentPeriodContributions,
+        lateFinesCollectedThisPeriod: currentPeriodLateFines,
+        cashInBankAtEndOfPeriod: cashInBank,
+        cashInHandAtEndOfPeriod: cashInHand,
+        totalCollectionThisPeriod: periodicData.totalCollectionThisPeriod,
+        expensesThisPeriod: periodicData.expensesThisPeriod,
+        interestEarnedThisPeriod: periodicData.interestEarnedThisPeriod,
+        loanProcessingFeesCollectedThisPeriod: periodicData.loanProcessingFeesCollectedThisPeriod,
+        newMembersJoinedThisPeriod: periodicData.newMembersJoinedThisPeriod,
+        sharePerMemberThisPeriod: periodicData.sharePerMemberThisPeriod,
+      };
+
+      const createdRecord = await tx.groupPeriodicRecord.create({
+        data: dataForCreate
+      });
+
+      // Create member records if provided
+      if (periodicData.memberRecords && periodicData.memberRecords.length > 0) {
+        const memberRecordsData = periodicData.memberRecords.map(memberRecord => ({
+          periodicRecordId: createdRecord.id,
+          memberId: memberRecord.memberId,
+          compulsoryContribution: memberRecord.compulsoryContribution,
+          loanRepaymentPrincipal: memberRecord.loanRepaymentPrincipal,
+          lateFinePaid: memberRecord.lateFinePaid,
+        }));
+
+        await tx.memberPeriodicRecord.createMany({
+          data: memberRecordsData
+        });
+      }
+
+      return tx.groupPeriodicRecord.findUnique({
+        where: { id: createdRecord.id },
+        include: { memberRecords: true }, 
+      });
+    });
+
+    return NextResponse.json(newRecord, { status: 201 });
+  } catch (error) {
+    console.error("Failed to create periodic record:", error);
+    if (error instanceof Error && 'code' in error && error.code === 'P2002') {
+      return NextResponse.json(
+        { error: 'A periodic record for this meeting date already exists' },
+        { status: 409 }
+      );
+    }
+    return NextResponse.json({ error: 'Failed to create periodic record' }, { status: 500 });
+  }
+}
+
+// GET /api/groups/{groupId}/periodic-records
+export async function GET(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id: idFromParams } = await params;
+  
+  if (!idFromParams) {
+    return NextResponse.json({ error: 'Group ID is required' }, { status: 400 });
+  }
+
+  // Regular expression to check if a string is a valid MongoDB ObjectId
+  // An ObjectId is a 24-character hexadecimal string.
+  const objectIdRegex = /^[0-9a-fA-F]{24}$/;
+
+  try {
+    let group;
+    if (objectIdRegex.test(idFromParams)) {
+      // If idFromParams looks like an ObjectId, try finding by id first
+      group = await prisma.group.findUnique({
+        where: { id: idFromParams },
+      });
+    } else {
+      // If idFromParams doesn't look like an ObjectId, try finding by name
+      group = await prisma.group.findFirst({
+        where: { name: idFromParams },
+      });
+    }
+
+    if (!group) {
+      return NextResponse.json({ error: 'Group not found' }, { status: 404 });
+    }
+
+    const actualGroupId = group.id;
+
+    // Get all periodic records for this group with member records included
+    const records = await prisma.groupPeriodicRecord.findMany({
+      where: { groupId: actualGroupId },
+      include: {
+        memberRecords: {
+          include: {
+            member: {
+              select: { name: true }
+            }
+          }
+        }
+      },
+      orderBy: [
+        { meetingDate: 'desc' },
+        { createdAt: 'desc' }
+      ]
+    });
+
+    // For each record, recalculate the total standing to ensure it's correct
+    const recordsWithCorrectStanding = await Promise.all(records.map(async (r) => {
+      // Get active loans for the group at the time of this record
+      const activeLoans = await prisma.loan.findMany({
+        where: {
+          groupId: actualGroupId,
+          status: 'ACTIVE',
+          // Only include loans created before or on this record's date
+          createdAt: {
+            lte: r.meetingDate
+          }
+        }
+      });
+
+      const totalLoanAssets = activeLoans.reduce(
+        (sum, loan) => sum + (loan.currentBalance || 0), 0
+      );
+
+      const cashInHand = r.cashInHandAtEndOfPeriod || 0;
+      const cashInBank = r.cashInBankAtEndOfPeriod || 0;
+      const totalCash = cashInHand + cashInBank;
+
+      // Calculate correct total standing
+      const correctTotalStanding = totalCash + totalLoanAssets;
+
+      return {
+        ...r,
+        totalGroupStandingAtEndOfPeriod: correctTotalStanding,
+        // Keep original value for comparison if needed
+        originalTotalGroupStandingAtEndOfPeriod: r.totalGroupStandingAtEndOfPeriod
+      };
+    }));
+
+    // Return simplified structure
+    const simplifiedRecords = recordsWithCorrectStanding.map(r => ({
+      id: r.id,
+      meetingDate: r.meetingDate,
+      recordSequenceNumber: r.recordSequenceNumber,
+      standingAtStartOfPeriod: r.standingAtStartOfPeriod,
+      totalGroupStandingAtEndOfPeriod: r.totalGroupStandingAtEndOfPeriod
+    }));
+
+    return NextResponse.json(simplifiedRecords);
+  } catch (error) {
+    console.error("Failed to fetch periodic records:", error);
+    return NextResponse.json({ error: 'Failed to fetch periodic records' }, { status: 500 });
+  }
+}

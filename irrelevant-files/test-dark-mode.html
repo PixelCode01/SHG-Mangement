@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dark Mode Test</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+        }
+    </script>
+</head>
+<body class="bg-gray-900 text-white p-8">
+    <h1 class="text-2xl font-bold mb-6">Dark Mode Test</h1>
+    
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 text-sm">
+        <!-- Meeting Details Card -->
+        <div class="bg-blue-50 dark:bg-blue-900/20 p-3 rounded border border-blue-200 dark:border-blue-700">
+            <h4 class="font-semibold text-blue-800 dark:text-blue-200 mb-2">Meeting Details</h4>
+            <p class="text-blue-700 dark:text-blue-300">Members Present: 15</p>
+            <p class="text-blue-700 dark:text-blue-300">New Members: 2</p>
+        </div>
+        
+        <!-- Cash Position Card -->
+        <div class="bg-green-50 dark:bg-green-900/20 p-3 rounded border border-green-200 dark:border-green-700">
+            <h4 class="font-semibold text-green-800 dark:text-green-200 mb-2">Cash Position</h4>
+            <p class="text-green-700 dark:text-green-300">Cash in Hand: ₹5,000.00</p>
+            <p class="text-green-700 dark:text-green-300">Cash in Bank: ₹25,000.00</p>
+            <p class="font-semibold text-green-800 dark:text-green-200">Total Standing: ₹30,000.00</p>
+        </div>
+        
+        <!-- Period Income Card -->
+        <div class="bg-purple-50 dark:bg-purple-900/20 p-3 rounded border border-purple-200 dark:border-purple-700">
+            <h4 class="font-semibold text-purple-800 dark:text-purple-200 mb-2">Period Income</h4>
+            <p class="text-purple-700 dark:text-purple-300">New Contributions: ₹3,000.00</p>
+            <p class="text-purple-700 dark:text-purple-300">Interest Earned: ₹500.00</p>
+            <p class="text-purple-700 dark:text-purple-300">Late Fines: ₹100.00</p>
+            <p class="text-purple-700 dark:text-purple-300">Loan Processing Fees: ₹200.00</p>
+        </div>
+        
+        <!-- Period Summary Card -->
+        <div class="bg-orange-50 dark:bg-orange-900/20 p-3 rounded border border-orange-200 dark:border-orange-700">
+            <h4 class="font-semibold text-orange-800 dark:text-orange-200 mb-2">Period Summary</h4>
+            <p class="text-orange-700 dark:text-orange-300">Total Collection: ₹3,800.00</p>
+            <p class="text-orange-700 dark:text-orange-300">Expenses: ₹200.00</p>
+            <p class="text-orange-700 dark:text-orange-300">Starting Balance: ₹26,400.00</p>
+        </div>
+    </div>
+    
+    <div class="mt-8 p-4 bg-gray-800 rounded">
+        <h3 class="text-lg font-semibold mb-2">Toggle Theme</h3>
+        <button onclick="toggleTheme()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded">
+            Toggle Dark/Light Mode
+        </button>
+    </div>
+    
+    <script>
+        function toggleTheme() {
+            document.documentElement.classList.toggle('dark');
+        }
+    </script>
+</body>
+</html>

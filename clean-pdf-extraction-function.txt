@@ -1,0 +1,193 @@
+  // V29: Server-side PDF extraction with automatic PDF-to-Excel fallback
+  const extractMembersFromPDFV11 = useCallback(async (file: File): Promise<MemberImportRow[]> => {
+    console.log(`🚀 V29 ENHANCED PDF EXTRACTION: ${file.name}, size: ${file.size} bytes`);
+    console.log(`📦 V29 TIMESTAMP: ${Date.now()}`);
+    console.log(`🎯 V29 STRATEGY: Primary extraction + automatic PDF-to-Excel fallback`);
+    
+    try {
+      // Create FormData for file upload
+      const formData = new FormData();
+      formData.append('file', file);
+      console.log('📦 V29: FormData created successfully');
+      
+      // Try the working pdf-parse endpoint (v15)
+      console.log('📤 V29: Uploading PDF to /api/pdf-upload-v15 (pdf-parse extraction endpoint)...');
+      
+      // Call server-side endpoint - UPDATED TO USE WORKING PDF-PARSE EXTRACTION
+      const response = await fetch('/api/pdf-upload-v15', {
+        method: 'POST',
+        body: formData,
+        headers: {
+          // Don't set Content-Type for FormData - browser will set it automatically with boundary
+        }
+      });
+      
+      console.log(`📊 V29: Response status: ${response.status}`);
+      console.log(`📊 V29: Response headers:`, Object.fromEntries(response.headers.entries()));
+      
+      if (!response.ok) {
+        console.log(`❌ V29: Response not OK - status ${response.status}`);
+        
+        // Check if this is a 422 (server requesting fallback)
+        if (response.status === 422) {
+          console.log('🔄 V29: Server requested fallback to client-side processing (422)');
+          const errorData = await response.json();
+          console.log('📋 V29: 422 error data:', errorData);
+          if (errorData.fallbackRequired || errorData.emergencyFix) {
+            console.log('🚨 V29: Emergency fix active - using PDF-to-Excel fallback');
+            throw new Error('FALLBACK_REQUIRED');
+          }
+        }
+        
+        const errorText = await response.text();
+        console.error('❌ V29: Server extraction failed:', response.status, errorText.substring(0, 200));
+        throw new Error(`Server extraction failed: ${response.status} ${errorText.substring(0, 100)}`);
+      }
+      
+      console.log('📄 V29: Parsing response as JSON...');
+      const result = await response.json();
+      console.log('✅ V29: Server extraction response:', result);
+      
+      if (!result.success) {
+        console.log('❌ V29: Server reports extraction unsuccessful');
+        throw new Error(result.error || 'Server extraction failed');
+      }
+      
+      console.log(`🎉 V29: Server successfully extracted ${result.members?.length || 0} members`);
+      
+      // Check if we got meaningful data
+      if (!result.members || result.members.length === 0) {
+        console.log('⚠️ V29: No members found in PDF - triggering PDF-to-Excel fallback');
+        throw new Error('NO_MEMBERS_FOUND');
+      }
+      
+      // Convert server response to MemberImportRow format
+      const members: MemberImportRow[] = result.members.map((member: any, index: number) => ({
+        id: (index + 1).toString(),
+        memberId: `IMPORT_${index + 1}`,
+        name: member.name,
+        currentShare: member.currentShare || 0,
+        currentLoanAmount: member.currentLoanAmount || 0,
+        isExisting: false,
+        isValid: true
+      }));
+      
+      console.log(`✅ V29: Successfully extracted ${members.length} members from server`);
+      console.log('👥 Extracted members:', members.map(m => m.name).join(', '));
+      
+      return members;
+      
+    } catch (error) {
+      console.error('❌ V29: Primary PDF extraction failed:', error);
+      console.log(`🔧 V29: Error type: ${error instanceof Error ? error.constructor.name : typeof error}`);
+      console.log(`🔧 V29: Error message: ${error instanceof Error ? error.message : String(error)}`);
+      
+      // AUTOMATIC PDF-TO-EXCEL FALLBACK - NO UI EXPOSURE
+      console.log('🔄 V29: Starting automatic PDF-to-Excel conversion fallback...');
+      
+      try {
+        console.log('📊 V29: Converting PDF to Excel automatically...');
+        
+        // Create FormData for PDF-to-Excel conversion
+        const conversionFormData = new FormData();
+        conversionFormData.append('file', file);
+        
+        // Call PDF-to-Excel conversion endpoint
+        const conversionResponse = await fetch('/api/pdf-to-excel', {
+          method: 'POST',
+          body: conversionFormData,
+        });
+        
+        if (!conversionResponse.ok) {
+          throw new Error(`PDF-to-Excel conversion failed: ${conversionResponse.status}`);
+        }
+        
+        console.log('✅ V29: PDF-to-Excel conversion successful');
+        
+        // Get the Excel buffer from the response
+        const excelBuffer = await conversionResponse.arrayBuffer();
+        console.log(`📊 V29: Excel buffer received: ${excelBuffer.byteLength} bytes`);
+        
+        // Parse the Excel buffer directly without downloading
+        console.log('📖 V29: Parsing Excel buffer with ExcelJS...');
+        const ExcelJS = await import('exceljs');
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.load(excelBuffer);
+        const worksheet = workbook.getWorksheet(1);
+        
+        if (!worksheet) {
+          throw new Error('No worksheet found in converted Excel file');
+        }
+        
+        const extractedMembers: MemberImportRow[] = [];
+        const headers: string[] = [];
+        
+        // Get headers from first row
+        worksheet.getRow(1).eachCell((cell, colNumber) => {
+          headers[colNumber - 1] = cell.text;
+        });
+        
+        console.log('📋 V29: Excel headers found:', headers);
+        
+        // Process data rows
+        worksheet.eachRow((row, rowNumber) => {
+          if (rowNumber > 1) { // Skip header row
+            const rowData: any = {};
+            row.eachCell((cell, colNumber) => {
+              const header = headers[colNumber - 1];
+              if (header) {
+                rowData[header] = cell.text;
+              }
+            });
+            
+            // Extract member data from the row
+            const name = (rowData.Name || rowData.name || rowData.NAME || '').trim();
+            const loanAmount = parseFloat(rowData['Loan Amount'] || rowData['loan amount'] || rowData.LoanAmount || '0') || 0;
+            
+            if (name && name.length > 1) {
+              extractedMembers.push({
+                id: extractedMembers.length + 1 + '',
+                memberId: `EXCEL_IMPORT_${extractedMembers.length + 1}`,
+                name: name,
+                currentShare: 0,
+                currentLoanAmount: loanAmount,
+                isExisting: false,
+                isValid: true
+              });
+            }
+          }
+        });
+        
+        console.log(`🎉 V29: PDF-to-Excel fallback successful! Extracted ${extractedMembers.length} members`);
+        console.log('👥 V29: Fallback extracted members:', extractedMembers.map(m => m.name).join(', '));
+        
+        if (extractedMembers.length === 0) {
+          throw new Error('No valid members found in converted Excel file');
+        }
+        
+        return extractedMembers;
+        
+      } catch (fallbackError) {
+        console.error('❌ V29: PDF-to-Excel fallback also failed:', fallbackError);
+        
+        // Show comprehensive error message since all automated methods failed
+        const errorMessage = `
+❌ PDF Import Failed
+
+We couldn't extract member names from this PDF file using any of our automated methods:
+1. Direct PDF text extraction  
+2. Automatic PDF-to-Excel conversion
+
+Please try one of these alternatives:
+1. 📝 Copy and paste member names manually
+2. 📊 Convert PDF to Excel/CSV format manually first  
+3. ➕ Add members individually using the form
+
+The PDF may contain scanned images or use an unsupported format.
+        `.trim();
+        
+        alert(errorMessage);
+        return [];
+      }
+    }
+  }, [processExtractedPDFLines]);

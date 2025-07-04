@@ -1,0 +1,24 @@
+// filepath: /home/pixel/SHG/app/api/auth/session/route.ts
+import { auth } from "@/app/api/auth/[...nextauth]/route";
+import { NextResponse } from "next/server";
+
+// This route handles GET /api/auth/session
+export async function GET() {
+  try {
+    const session = await auth();
+    
+    // Return the session as JSON with proper null handling
+    return NextResponse.json(session || { user: null });
+  } catch (error) {
+    console.error("[Session API] Error getting session:", error);
+    // Return a properly formatted error response
+    return NextResponse.json(
+      { 
+        error: "Failed to get session", 
+        user: null,
+        timestamp: new Date().toISOString()
+      },
+      { status: 500 }
+    );
+  }
+}

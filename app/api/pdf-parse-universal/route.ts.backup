@@ -1,0 +1,1071 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { DEPLOYMENT_VERSION } from './deployment-marker';
+
+export async function POST(request: NextRequest) {
+  try {
+    console.log('📄 Universal PDF parsing endpoint called - v2.1 FORCE_DEPLOY');
+    console.log('🚀 Deployment version:', DEPLOYMENT_VERSION);
+    console.log('🔍 VALIDATION LOG: Processing started at', new Date().toISOString());
+    
+    const formData = await request.formData();
+    const file = formData.get('file') as File;
+    
+    if (!file) {
+      console.error('PDF parse error: No file provided');
+      return NextResponse.json({ error: 'No file provided' }, { status: 400 });
+    }
+    
+    console.log(`📁 Processing file: ${file.name}, size: ${file.size} bytes, type: ${file.type}`);
+    console.log('🔍 VALIDATION LOG: File received successfully');
+    
+    // Check if file is a PDF
+    if (!file.type.includes('pdf') && !file.name.toLowerCase().endsWith('.pdf')) {
+      console.error('PDF parse error: File is not a PDF');
+      return NextResponse.json({ 
+        error: 'File is not a PDF', 
+        fileType: file.type,
+        fileName: file.name
+      }, { status: 400 });
+    }
+    
+    try {
+      // Convert file to buffer
+      const arrayBuffer = await file.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      
+      console.log(`🔍 Parsing PDF with pdf-parse... Buffer size: ${buffer.length} bytes`);
+      
+      let fullText = '';
+      let pdfData = null;
+      
+      try {
+        // Try PDF.js first for better text encoding handling
+        console.log('🔄 Trying PDF.js for better text extraction...');
+        const pdfjsLib = await import('pdfjs-dist');
+        
+        const loadingTask = pdfjsLib.getDocument({ data: buffer });
+        const pdf = await loadingTask.promise;
+        
+        console.log(`✅ PDF.js loaded successfully with ${pdf.numPages} pages`);
+        
+        const pages: string[] = [];
+        
+        // Extract text from each page
+        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+          const page = await pdf.getPage(pageNum);
+          const textContent = await page.getTextContent();
+          
+          // Combine text items into page text, preserving structure
+          const pageText = textContent.items
+            .map((item) => {
+              if (!('str' in item)) return '';
+              return (item as { str: string }).str;
+            })
+            .join(' ')
+            .replace(/\s+/g, ' ');
+          
+          pages.push(pageText);
+          fullText += pageText + '\n';
+        }
+        
+        console.log(`✅ PDF.js extraction successful. Text length: ${fullText.length} characters`);
+        console.log(`📊 Pages: ${pdf.numPages}`);
+        console.log('🔍 VALIDATION LOG: About to apply text cleaning (PDF.js path)');
+        console.log(`🔍 VALIDATION LOG: Sample text before cleaning: "${fullText.substring(0, 200)}"`);
+        
+        // Apply text cleaning to fix encoding issues
+        fullText = cleanExtractedText(fullText);
+        console.log(`🧹 Applied text cleaning. Final length: ${fullText.length} characters`);
+        console.log('🔍 VALIDATION LOG: About to apply line break recovery');
+        console.log(`🔍 VALIDATION LOG: Lines before recovery: ${fullText.split('\n').length}`);
+        
+        // Apply pattern-based line break recovery for member extraction
+        fullText = recoverLineBreaks(fullText);
+        console.log(`📐 Applied line break recovery. Final length: ${fullText.length} characters`);
+        console.log(`🔍 VALIDATION LOG: Lines after recovery: ${fullText.split('\n').length}`);
+        console.log(`🔍 VALIDATION LOG: Sample text after recovery: "${fullText.substring(0, 200)}"`);
+        
+        // Create data object for compatibility
+        pdfData = {
+          text: fullText,
+          numpages: pdf.numPages,
+          version: 'pdfjs',
+          info: {},
+          metadata: null
+        };
+        
+      } catch (pdfjsError) {
+        console.log(`⚠️ PDF.js failed: ${(pdfjsError as Error).message}`);
+        console.log(`🔄 Falling back to pdf-parse...`);
+        
+        // Fallback to pdf-parse
+        try {
+          const pdfParse = await import('pdf-parse');
+          pdfData = await pdfParse.default(buffer, {
+            max: 0
+          });
+          
+          console.log(`✅ pdf-parse fallback successful. Text length: ${pdfData.text.length} characters`);
+          console.log(`📊 Pages: ${pdfData.numpages}`);
+          
+          fullText = pdfData.text;
+          
+          // Apply text cleaning to fix encoding issues
+          fullText = cleanExtractedText(fullText);
+          console.log(`🧹 Applied text cleaning. Final length: ${fullText.length} characters`);
+          
+          // Apply pattern-based line break recovery for member extraction
+          fullText = recoverLineBreaks(fullText);
+          console.log(`📐 Applied line break recovery. Final length: ${fullText.length} characters`);
+          
+          // Filter out document metadata and software references
+          const metadataFilters = [
+            /Microsoft Excel/gi,
+            /Microsoft/gi,
+            /Excel/gi,
+            /for Microsoft/gi,
+            /Adobe/gi,
+            /PDF/gi,
+            /Creator:/gi,
+            /Producer:/gi,
+            /Title:/gi,
+            /Subject:/gi,
+            /Keywords:/gi,
+            /CreationDate:/gi,
+            /ModDate:/gi
+          ];
+          
+          let filteredText = fullText;
+          metadataFilters.forEach(filter => {
+            filteredText = filteredText.replace(filter, ' ');
+          });
+          
+          // Clean up after metadata removal
+          filteredText = filteredText
+            .replace(/[ \t]+/g, ' ')  // Only replace spaces and tabs, not newlines
+            .replace(/\n\s+/g, '\n')
+            .replace(/\s+\n/g, '\n')
+            .replace(/\n+/g, '\n')  // Collapse multiple line breaks to single
+            .trim();
+          
+          console.log(`🔍 Text filtering: ${fullText.length} → ${filteredText.length} characters`);
+          console.log(`🔍 Filtered sample (first 200 chars): "${filteredText.substring(0, 200)}"`);
+          
+          // Use the filtered text for processing
+          fullText = filteredText;
+          
+        } catch (pdfParseError) {
+          console.log(`⚠️ pdf-parse also failed: ${(pdfParseError as Error).message}`);
+          console.log(`🔄 Trying binary fallback extraction...`);
+          
+          // Binary fallback: Extract text from PDF using simple pattern matching
+          const pdfString = buffer.toString('binary');
+          const textMatches = pdfString.match(/\(([^)]+)\)/g);
+          
+          if (textMatches) {
+            fullText = textMatches.map(m => m.slice(1, -1)).join(' ');
+            
+            // Apply text cleaning to binary extracted text too
+            fullText = cleanExtractedText(fullText);
+            console.log(`✅ Binary fallback extraction successful. Text length: ${fullText.length} characters`);
+            
+            // Create mock data object for fallback
+            pdfData = {
+              text: fullText,
+              numpages: 1,
+              version: 'binary-fallback',
+              info: {},
+              metadata: null
+            };
+          } else {
+            throw new Error('All extraction methods failed');
+          }
+        }
+      }
+      
+      // Save extracted content to temp file for debugging purposes
+      try {
+        const fs = await import('fs/promises');
+        const path = await import('path');
+        const tmpDir = path.default.join(process.cwd(), 'tmp');
+        
+        // Create tmp directory if it doesn't exist
+        try {
+          await fs.mkdir(tmpDir, { recursive: true });
+        } catch {
+          // Directory might already exist, that's fine
+        }
+        
+        await fs.writeFile(path.default.join(tmpDir, 'last-parsed-pdf-universal.txt'), fullText);
+        console.log("📝 Saved extracted PDF text to tmp/last-parsed-pdf-universal.txt");
+        
+        // Also log first few lines to console for debugging
+        const firstLines = fullText.split('\n').slice(0, 10).join('\n');
+        console.log("📄 First 10 lines of extracted text:");
+        console.log(firstLines);
+      } catch (writeError) {
+        console.error("Failed to save extracted PDF text:", writeError);
+      }
+      
+      const lines = fullText.split(/\r?\n/).map(line => line.trim()).filter(line => line);
+      
+      console.log(`📝 Total lines extracted: ${lines.length}`);
+      
+      // Enhanced debugging for multi-member PDFs
+      console.log(`🔍 DEBUG: Total lines in PDF: ${lines.length}`);
+      console.log(`🔍 DEBUG: First 20 lines:`);
+      lines.slice(0, 20).forEach((line, index) => {
+        console.log(`   ${index + 1}. "${line}"`);
+      });
+      
+      if (lines.length > 40) {
+        console.log(`🔍 DEBUG: Last 10 lines:`);
+        lines.slice(-10).forEach((line, index) => {
+          console.log(`   ${lines.length - 10 + index + 1}. "${line}"`);
+        });
+      }
+      
+      // Look for patterns that might indicate member records
+      const linesWithNumbers = lines.filter(line => /\d+/.test(line));
+      console.log(`🔍 DEBUG: Lines containing numbers: ${linesWithNumbers.length}`);
+      
+      // Sample some lines with numbers
+      linesWithNumbers.slice(0, 10).forEach((line, index) => {
+        console.log(`   Number line ${index + 1}: "${line}"`);
+      });
+      
+      // Find header row with name, loan, email, phone columns
+      let headerIndex = -1;
+      const columnPositions: { [key: string]: number } = {};
+      let formatType = 'unknown';
+      
+      for (let i = 0; i < lines.length; i++) {
+        const lineElement = lines[i];
+        if (!lineElement) continue;
+        const line = lineElement.toLowerCase();
+        
+        // Check for SWAWLAMBAN specific format first
+        if (line.includes('name') && line.includes('loan')) {
+          headerIndex = i;
+          
+          // Check if this looks like SWAWLAMBAN format by looking at the next few lines
+          let isProbablySWAWLAMBAN = false;
+          for (let j = i + 1; j < Math.min(i + 5, lines.length); j++) {
+            const dataLine = lines[j];
+            // If we see concatenated name+number patterns, it's likely SWAWLAMBAN
+            if (dataLine && /^[A-Za-z\s]+\d+$/.test(dataLine.trim())) {
+              isProbablySWAWLAMBAN = true;
+              break;
+            }
+          }
+          
+          if (isProbablySWAWLAMBAN || (!line.includes('email') && !line.includes('phone'))) {
+            formatType = 'swawlamban';
+            console.log(`📋 Found SWAWLAMBAN header at line ${i + 1}: "${lines[i]}"`);
+            break;
+          } else {
+            formatType = 'structured';
+            const headerLine = lines[i];
+            if (!headerLine) continue;
+            console.log(`📋 Found structured header at line ${i + 1}: "${headerLine}"`);
+            
+            // Determine column positions by analyzing the header
+            const headerParts = headerLine.split(/\s{2,}|\t/); // Split by multiple spaces or tabs
+            
+            headerParts.forEach((part, index) => {
+              const lowerPart = part.toLowerCase().trim();
+              if (lowerPart.includes('name')) {
+                columnPositions.name = index;
+              } else if (lowerPart.includes('loan')) {
+                columnPositions.loan = index;
+              } else if (lowerPart.includes('email')) {
+                columnPositions.email = index;
+              } else if (lowerPart.includes('phone')) {
+                columnPositions.phone = index;
+              }
+            });
+            
+            console.log('📍 Column positions:', columnPositions);
+            break;
+          }
+        }
+      }
+      
+      if (headerIndex === -1) {
+        // Try separated sections parsing
+        console.log('⚠️  No clear headers found, trying separated sections parsing...');
+        const separatedResult = await parseSeparatedSections(lines, pdfData);
+        if (separatedResult) {
+          return separatedResult;
+        }
+        
+        // Enhanced pattern detection for multi-member PDFs
+        console.log('⚠️  Separated sections failed, attempting enhanced pattern detection...');
+        console.log('🔍 Trying multiple extraction patterns for 51 members...');
+        console.log(`🔍 VALIDATION LOG: Input fullText length: ${fullText.length}, lines: ${fullText.split('\n').length}`);
+        console.log(`🔍 VALIDATION LOG: First 5 lines for pattern matching:`);
+        fullText.split('\n').slice(0, 5).forEach((line: string, i: number) => {
+          console.log(`   Line ${i}: "${line}"`);
+        });
+        
+        // Try different patterns to extract all members
+        const patterns = [
+          /^(.+?)(\d+)$/, // Name followed by number (SWAWLAMBAN style)
+          /^(\d+)\s+(.+?)(\d+)$/, // Number, name, amount
+          /^(.+?)\s+(\d+)$/, // Name space amount
+          /(\w+(?:\s+\w+)*)\s+(\d+)/ // Multiple words followed by number
+        ];
+        
+        let bestResult = null;
+        let maxMembers = 0;
+        
+        for (let patternIndex = 0; patternIndex < patterns.length; patternIndex++) {
+          const pattern = patterns[patternIndex];
+          if (!pattern) continue;
+          
+          console.log(`🔍 Trying pattern ${patternIndex + 1}: ${pattern.source}`);
+          
+          const testMembers = [];
+          const testFailedLines = [];
+          
+          for (const line of lines) {
+            if (!line || line.trim().length < 3) continue;
+            
+            // Skip metadata and software reference lines
+            const lowerLine = line.toLowerCase();
+            if (lowerLine.includes('microsoft') || 
+                lowerLine.includes('excel') || 
+                lowerLine.includes('adobe') ||
+                lowerLine.includes('pdf') ||
+                lowerLine.includes('creator') ||
+                lowerLine.includes('producer') ||
+                lowerLine.includes('for microsoft')) {
+              continue;
+            }
+            
+            // Skip obvious header lines
+            if (lowerLine.includes('name') && lowerLine.includes('loan')) {
+              continue;
+            }
+            
+            const match = line.match(pattern);
+            if (match) {
+              let name, amount;
+              
+              if (patternIndex === 0) { // Name + amount
+                name = match[1]?.trim();
+                amount = parseInt(match[2] || '0');
+              } else if (patternIndex === 1) { // Number + name + amount  
+                name = match[2]?.trim();
+                amount = parseInt(match[3] || '0');
+              } else { // Name + amount (with space)
+                name = match[1]?.trim();
+                amount = parseInt(match[2] || '0');
+              }
+              
+              if (name && name.length >= 1 && amount >= 0 && amount <= 10000000) {
+                // Skip names that are clearly metadata
+                const nameCheck = name.toLowerCase();
+                if (nameCheck.includes('microsoft') || 
+                    nameCheck.includes('excel') ||
+                    nameCheck.includes('adobe') ||
+                    nameCheck.includes('pdf') ||
+                    nameCheck.includes('for') ||
+                    nameCheck.length > 100) { // Unreasonably long names are likely metadata
+                  testFailedLines.push(line);
+                  continue;
+                }
+                
+                // Additional cleaning for the name
+                const cleanedName = name
+                  .replace(/^\d+\s*/, '') // Remove leading numbers
+                  .replace(/[^A-Za-z\s]/g, ' ') // Remove special chars
+                  .replace(/\s+/g, ' ')
+                  .trim();
+                
+                if (cleanedName.length >= 1) {
+                  testMembers.push({
+                    name: cleanedName,
+                    loanAmount: amount,
+                    'loan amount': amount.toString(),
+                    email: '',
+                    phone: ''
+                  });
+                  console.log(`   ✅ Pattern ${patternIndex + 1}: "${cleanedName}" - ₹${amount}`);
+                }
+              } else {
+                testFailedLines.push(line);
+              }
+            } else {
+              testFailedLines.push(line);
+            }
+          }
+          
+          console.log(`🔍 Pattern ${patternIndex + 1} found ${testMembers.length} members`);
+          
+          if (testMembers.length > maxMembers) {
+            maxMembers = testMembers.length;
+            bestResult = {
+              members: testMembers,
+              failedLines: testFailedLines,
+              pattern: patternIndex + 1
+            };
+          }
+        }
+        
+        if (bestResult && bestResult.members.length > 0) {
+          console.log(`✅ Best pattern (${bestResult.pattern}) extracted ${bestResult.members.length} members`);
+          console.log(`⚠️  ${bestResult.failedLines.length} lines could not be parsed`);
+          
+          // Calculate statistics
+          const membersWithLoans = bestResult.members.filter(m => parseInt(m['loan amount']) > 0).length;
+          const membersWithoutLoans = bestResult.members.length - membersWithLoans;
+          const totalLoanAmount = bestResult.members.reduce((sum, m) => sum + parseInt(m['loan amount']), 0);
+          
+          console.log(`📊 Enhanced Pattern Statistics:`);
+          console.log(`   - Total members: ${bestResult.members.length}`);
+          console.log(`   - Members with loans: ${membersWithLoans}`);
+          console.log(`   - Members without loans: ${membersWithoutLoans}`);
+          console.log(`   - Total loan amount: ₹${totalLoanAmount.toLocaleString()}`);
+          
+          return NextResponse.json({
+            success: true,
+            members: bestResult.members,
+            statistics: {
+              totalMembers: bestResult.members.length,
+              membersWithLoans,
+              membersWithoutLoans,
+              totalLoanAmount
+            },
+            pages: [pdfData?.text || ''],
+            totalPages: pdfData?.numpages || 1,
+            text: pdfData?.text || '',
+            extractionMethod: `enhanced-pattern-${bestResult.pattern}`,
+            debug: {
+              linesProcessed: lines.length,
+              failedLines: bestResult.failedLines.length
+            }
+          });
+        }
+        
+        // Final fallback: Try to detect columns without explicit headers
+        console.log('⚠️  Enhanced patterns failed, attempting original pattern detection...');
+        return await detectPatternWithoutHeaders(lines, pdfData);
+      }
+      
+      // Parse data based on format type
+      if (formatType === 'swawlamban') {
+        return await parseSWAWLAMBANFormat(lines, headerIndex, pdfData);
+      } else {
+        return await parseStructuredFormat(lines, headerIndex, columnPositions, pdfData);
+      }
+      
+    } catch (pdfError) {
+      console.error('PDF parsing error:', pdfError);
+      return NextResponse.json({
+        error: 'Failed to parse PDF document',
+        details: pdfError instanceof Error ? pdfError.message : 'Unknown PDF parsing error'
+      }, { status: 500 });
+    }
+    
+  } catch (error) {
+    console.error('Server error in PDF parse universal:', error);
+    return NextResponse.json({
+      error: 'Server error during PDF parsing',
+      details: error instanceof Error ? error.message : 'Unknown server error'
+    }, { status: 500 });
+  }
+}
+
+// Function to clean extracted text and fix encoding issues
+function cleanExtractedText(text: string): string {
+  if (!text) return '';
+  
+  let cleaned = text;
+  
+  try {
+    // More aggressive cleaning for heavily corrupted PDFs
+    cleaned = cleaned
+      // Remove all control characters and non-printable characters
+      .replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ')
+      // Remove most special characters except basic punctuation
+      .replace(/[^\x20-\x7E]/g, ' ')
+      // Remove hex escape sequences
+      .replace(/x[0-9A-Fa-f]{2}/g, ' ')
+      // Remove common corruption patterns
+      .replace(/[{}|\\/\[\]]/g, ' ')
+      .replace(/[­·´]/g, ' ')
+      // Clean up multiple spaces but preserve line breaks
+      .replace(/[ \t]+/g, ' ')  // Only replace spaces and tabs, not newlines
+      .replace(/\n\s+/g, '\n')
+      .replace(/\s+\n/g, '\n')
+      .replace(/\n+/g, '\n')  // Collapse multiple line breaks to single
+      .trim();
+      
+    console.log(`🧹 Text cleaning: ${text.length} → ${cleaned.length} characters`);
+    console.log(`🔍 Cleaned sample (first 100 chars): "${cleaned.substring(0, 100)}"`);
+    
+    // If text is too short after cleaning, try binary extraction patterns
+    if (cleaned.length < text.length * 0.1) {
+      console.log('⚠️ Text cleaning removed too much content, trying pattern extraction');
+      
+      // Try to extract readable words and numbers from the original
+      const words = text.match(/[A-Za-z]{2,}/g) || [];
+      const numbers = text.match(/\d+/g) || [];
+      
+      if (words.length > 0 || numbers.length > 0) {
+        cleaned = [...words, ...numbers].join(' ');
+        console.log(`🔧 Pattern extraction result: "${cleaned}"`);
+      } else {
+        console.log('⚠️ Using original text as last resort');
+        return text;
+      }
+    }
+    
+    return cleaned;
+    
+  } catch (error) {
+    console.error('Error in text cleaning:', error);
+    return text; // Return original on error
+  }
+}
+
+// Function to recover line breaks for member extraction
+function recoverLineBreaks(text: string): string {
+  if (!text) return '';
+  
+  console.log('🔧 Attempting to recover line breaks from text structure...');
+  
+  let recovered = text;
+  
+  try {
+    // Convert patterns where names are followed directly by numbers (member loan amounts)
+    // Pattern: "MISHRA178604 ASHOK" -> "MISHRA178604\nASHOK"
+    recovered = recovered.replace(/([A-Z]{2,}[A-Z\s]*?)(\d+)\s+([A-Z]{2,})/g, '$1$2\n$3');
+    
+    // Convert patterns where a name ends with numbers and is followed by another name
+    // Pattern: "SANTOSH MISHRA178604 ASHOK KUMAR" -> "SANTOSH MISHRA178604\nASHOK KUMAR"
+    recovered = recovered.replace(/([A-Z]+(?:\s+[A-Z]+)*\d+)\s+([A-Z]+(?:\s+[A-Z]+)*)/g, '$1\n$2');
+    
+    // Handle the specific pattern from this PDF: "NAME + NUMBER + SPACE + NAME"
+    // Pattern: "KESHRI0 ANUP" -> "KESHRI0\nANUP"
+    recovered = recovered.replace(/([A-Z]+)(\d+)\s+([A-Z]{3,})/g, '$1$2\n$3');
+    
+    // Convert number patterns followed by names into line breaks (but only at word boundaries)
+    // Pattern: "1000 2 Name" -> "1000\n2 Name" (assumes previous member's amount followed by new member number)
+    recovered = recovered.replace(/(\d{3,})\s+(\d+\s+[A-Za-z]{2,})/g, '$1\n$2');
+    
+    // Convert patterns where a number is followed immediately by a capital letter (new member)
+    // Pattern: "Devi1 Sunita" -> "Devi\n1 Sunita"
+    recovered = recovered.replace(/([A-Za-z]+)(\d+\s+[A-Z][a-z]+)/g, '$1\n$2');
+    
+    // Handle cases where member numbers are directly adjacent to names
+    // Pattern: "Name1Name2" -> "Name\n1Name2"
+    recovered = recovered.replace(/([a-z])(\d+[A-Z])/g, '$1\n$2');
+    
+    // Clean up multiple line breaks
+    recovered = recovered.replace(/\n+/g, '\n').trim();
+    
+    const originalLines = text.split('\n').length;
+    const recoveredLines = recovered.split('\n').length;
+    
+    console.log(`📈 Line break recovery: ${originalLines} → ${recoveredLines} lines`);
+    console.log(`🔍 Recovery sample (first 300 chars): "${recovered.substring(0, 300)}"`);
+    
+    return recovered;
+    
+  } catch (error) {
+    console.error('Error in line break recovery:', error);
+    return text;
+  }
+}
+
+// Parse SWAWLAMBAN format (Name followed by amount on same line or next line)
+async function parseSWAWLAMBANFormat(lines: string[], headerIndex: number, data: { text: string; numpages: number; version: string; info: Record<string, unknown>; metadata: null }) {
+  console.log('🔍 Parsing SWAWLAMBAN format...');
+  
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const members: any[] = []; // Complex dynamic structure from PDF parsing
+  const failedLines: string[] = [];
+  
+  // Start processing after the header
+  for (let i = headerIndex + 1; i < lines.length; i++) {
+    const lineElement = lines[i];
+    if (!lineElement) continue;
+    const line = lineElement.trim();
+    
+    // Skip empty lines, headers, and totals
+    if (!line || 
+        line.toLowerCase().includes('total') || 
+        line.toLowerCase().includes('grand') ||
+        line.toLowerCase().includes('name') ||
+        line.toLowerCase().includes('loan') ||
+        line === 'AI') {
+      continue;
+    }
+    
+    // SWAWLAMBAN pattern: NAME followed by AMOUNT (concatenated, no space)
+    const match = line.match(/^(.+?)(\d+)$/);
+    
+    if (match?.[1] && match[2]) {
+      const name = match[1].trim();
+      const amount = parseInt(match[2]);
+      
+      // Skip if name is too short, amount is unrealistic, or contains unwanted text
+      if (name.length >= 1 && // Relaxed from 3 to 1 for corrupted PDFs
+          amount >= 0 && 
+          amount <= 10000000 && // Reasonable upper limit for loan amounts
+          !name.includes('NAMELOAN') && 
+          !name.includes('NAME LOAN') &&
+          !name.includes('MAY') &&
+          !name.includes('MONTH') &&
+          !name.includes('TOTAL') &&
+          !name.includes('BANK') &&
+          match[2].length <= 7) { // Reasonable loan amount digit length
+        
+        // Clean the name further for display
+        const cleanedName = name
+          .replace(/\s+/g, ' ')
+          .trim()
+          .replace(/^[^A-Za-z]+/, '') // Remove leading non-letters
+          .replace(/[^A-Za-z\s]+$/, ''); // Remove trailing non-letters
+        
+        // Use original name if cleaning made it too short
+        const finalName = cleanedName.length >= 1 ? cleanedName : name;
+        
+        members.push({
+          name: finalName,
+          loanAmount: amount,
+          'loan amount': amount.toString(),
+          email: '',
+          phone: ''
+        });
+        console.log(`✅ SWAWLAMBAN: ${name} - ₹${amount}`);
+      } else {
+        failedLines.push(line);
+      }
+    } else {
+      failedLines.push(line);
+    }
+  }
+  
+  console.log(`✅ SWAWLAMBAN format: parsed ${members.length} members`);
+  console.log(`⚠️  ${failedLines.length} lines could not be parsed`);
+  
+  // Calculate statistics
+  const membersWithLoans = members.filter(m => parseInt(m['loan amount']) > 0).length;
+  const membersWithoutLoans = members.length - membersWithLoans;
+  const totalLoanAmount = members.reduce((sum, m) => sum + parseInt(m['loan amount']), 0);
+  
+  console.log(`📊 SWAWLAMBAN Statistics:`);
+  console.log(`   - Total members: ${members.length}`);
+  console.log(`   - Members with loans: ${membersWithLoans}`);
+  console.log(`   - Members without loans: ${membersWithoutLoans}`);
+  console.log(`   - Total loan amount: ₹${totalLoanAmount.toLocaleString()}`);
+  
+  return NextResponse.json({
+    success: true,
+    members: members,
+    statistics: {
+      totalMembers: members.length,
+      membersWithLoans,
+      membersWithoutLoans,
+      totalLoanAmount
+    },
+    pages: [members.map(m => `${m.name}\t${m['loan amount']}`).join('\n')],
+    totalPages: 1,
+    text: data.text,
+    headerFound: true,
+    formatType: 'swawlamban'
+  });
+}
+
+// Parse structured format with clear column separations
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function parseStructuredFormat(lines: string[], headerIndex: number, columnPositions: { [key: string]: number }, data: any) {
+  console.log('🔍 Parsing structured format...');
+  
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const members: any[] = []; // Complex dynamic structure from PDF parsing
+  const failedLines: string[] = [];
+  
+  for (let i = headerIndex + 1; i < lines.length; i++) {
+    const line = lines[i];
+    
+    // Skip empty lines or lines that look like footers/totals
+    if (!line || line.toLowerCase().includes('total') || line.toLowerCase().includes('grand')) {
+      continue;
+    }
+    
+    try {
+      const parts = line.split(/\s{2,}|\t/); // Split by multiple spaces or tabs
+      
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const member: any = { // Dynamic structure from PDF parsing
+        name: '',
+        loanAmount: 0,
+        'loan amount': '0',
+        email: '',
+        phone: ''
+      };
+      
+      // Extract data based on column positions
+      if (columnPositions.name !== undefined && parts[columnPositions.name]) {
+        const namePart = parts[columnPositions.name];
+        if (namePart) {
+          member.name = namePart.trim();
+        }
+      }
+      
+      if (columnPositions.loan !== undefined && parts[columnPositions.loan]) {
+        const loanPart = parts[columnPositions.loan];
+        if (loanPart) {
+          const loanText = loanPart.trim();
+          // Extract number from loan amount (remove currency symbols, commas, etc.)
+          const loanMatch = loanText.match(/[\d,]+/);
+          const loanAmount = loanMatch ? parseInt(loanMatch[0].replace(/,/g, '')) : 0;
+          member.loanAmount = loanAmount;
+          member['loan amount'] = loanAmount.toString();
+        }
+      }
+      
+      if (columnPositions.email !== undefined && parts[columnPositions.email]) {
+        const emailPart = parts[columnPositions.email];
+        if (emailPart) {
+          member.email = emailPart.trim();
+        }
+      }
+      
+      if (columnPositions.phone !== undefined && parts[columnPositions.phone]) {
+        const phonePart = parts[columnPositions.phone];
+        if (phonePart) {
+          member.phone = phonePart.trim();
+        }
+      }
+      
+      // Only add if we have a valid name
+      if (member.name && member.name.length > 1) {
+        members.push(member);
+        console.log(`✅ Structured: ${member.name} - Loan: ${member['loan amount']}`);
+      }
+      
+    } catch {
+      console.warn(`⚠️  Failed to parse line ${i + 1}: "${line}"`);
+      failedLines.push(line);
+    }
+  }
+  
+  console.log(`✅ Structured format: parsed ${members.length} members`);
+  console.log(`⚠️  ${failedLines.length} lines could not be parsed`);
+  
+  // Calculate statistics
+  const membersWithLoans = members.filter(m => parseInt(m['loan amount']) > 0).length;
+  const membersWithoutLoans = members.length - membersWithLoans;
+  const totalLoanAmount = members.reduce((sum, m) => sum + parseInt(m['loan amount']), 0);
+  
+  console.log(`📊 Structured Statistics:`);
+  console.log(`   - Total members: ${members.length}`);
+  console.log(`   - Members with loans: ${membersWithLoans}`);
+  console.log(`   - Members without loans: ${membersWithoutLoans}`);
+  console.log(`   - Total loan amount: ₹${totalLoanAmount.toLocaleString()}`);
+  
+  return NextResponse.json({
+    success: true,
+    members: members,
+    statistics: {
+      totalMembers: members.length,
+      membersWithLoans,
+      membersWithoutLoans,
+      totalLoanAmount
+    },
+    pages: [members.map(m => `${m.name}\t${m['loan amount']}\t${m.email || ''}\t${m.phone || ''}`).join('\n')],
+    totalPages: 1,
+    text: data.text,
+    headerFound: true,
+    formatType: 'structured',
+    columnPositions
+  });
+}
+
+// Fallback function for PDFs without clear headers
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function detectPatternWithoutHeaders(lines: string[], data: any) {
+  console.log('🔍 Attempting pattern detection without headers...');
+  
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const members: any[] = []; // Complex dynamic structure from PDF parsing
+  const patterns = [
+    // Pattern 1: Name followed by numbers (SWAWLAMBAN concatenated style) - Most common
+    /^(.+?)(\d+)$/,
+    // Pattern 2: Name followed by numbers with space
+    /^([A-Z\s]+?)\s+(\d+)(?:\s+(\S+@\S+\.\S+))?(?:\s+(\d{10,}))?$/,
+    // Pattern 3: Name, loan, email, phone separated by tabs or multiple spaces
+    /^(.+?)\s{2,}(\d+)\s{2,}(\S+@\S+\.\S+)?\s{2,}(\d{10,})?$/,
+    // Pattern 4: Comma separated values
+    /^(.+?),\s*(\d+),?\s*(\S+@\S+\.\S+)?,?\s*(\d{10,})?$/,
+    // Pattern 5: Name with currency symbol before amount
+    /^([A-Z][A-Za-z\s\.\-\']+)\s+[₹Rs\.\s]*(\d[\d,\.]*)\s*(?:(\S+@\S+\.\S+))?\s*(?:(\d{10,}))?$/,
+    // Pattern 6: Name with currency symbol and commas in amount
+    /^([A-Z][A-Za-z\s\.\-\']+)\s+[₹Rs\.\s]*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\s*(?:(\S+@\S+\.\S+))?\s*(?:(\d{10,}))?$/,
+    // Pattern 7: Name followed by amount with optional decimal
+    /^([A-Z][A-Za-z\s\.\-\']+)\s+(\d+(?:\.\d{2})?)\s*(?:(\S+@\S+\.\S+))?\s*(?:(\d{10,}))?$/,
+    // Pattern 8: Table-like format with Serial Number | Name | Amount
+    /^(?:\d+\s*\|\s*)?([A-Z][A-Za-z\s\.\-\']+)\s*\|\s*(\d[\d,\.]*)\s*(?:\|\s*(\S+@\S+\.\S+))?\s*(?:\|\s*(\d{10,}))?$/,
+    // Pattern 9: Name in quotes followed by amount
+    /^["']([A-Z][A-Za-z\s\.\-\']+)["']\s+(\d[\d,\.]*)\s*(?:(\S+@\S+\.\S+))?\s*(?:(\d{10,}))?$/,
+    // Pattern 10: Simple space-separated format with optional S.No
+    /^(?:\d+\s+)?([A-Z][A-Za-z\s\.\-\']+)\s+(\d[\d,\.]*)\s*(?:(\S+@\S+\.\S+))?\s*(?:(\d{10,}))?$/
+  ];
+  
+  for (const line of lines) {
+    if (!line || line.length < 3 || 
+        line.toLowerCase().includes('total') || 
+        line.toLowerCase().includes('grand') ||
+        line.toLowerCase().includes('name') ||
+        line.toLowerCase().includes('loan') ||
+        line.toLowerCase().includes('s.no') ||
+        line.toLowerCase().includes('serial') ||
+        line === 'AI') {
+      continue;
+    }
+    
+    for (let patternIndex = 0; patternIndex < patterns.length; patternIndex++) {
+      const pattern = patterns[patternIndex];
+      if (!pattern) continue;
+      const match = line.match(pattern);
+      if (match) {
+        const [, name, loan, email, phone] = match;
+        
+        if (name && name.trim().length > 1) {
+          // Clean the loan amount - remove commas, currency symbols, etc.
+          const cleanLoanAmount = loan ? loan.replace(/[₹Rs,\.\s]/g, '') : '0';
+          const parsedAmount = parseInt(cleanLoanAmount) || 0;
+          
+          // For pattern 0 (SWAWLAMBAN concatenated), apply strict validation
+          if (patternIndex === 0) {
+            const cleanName = name.trim();
+            
+            // Apply relaxed SWAWLAMBAN validation rules for corrupted PDFs
+            if (cleanName.length >= 1 && // Relaxed from 3 to 1 
+                parsedAmount >= 0 && 
+                parsedAmount <= 10000000 && 
+                !cleanName.includes('NAMELOAN') && 
+                !cleanName.includes('NAME LOAN') &&
+                !cleanName.includes('MAY') &&
+                !cleanName.includes('MONTH') &&
+                !cleanName.includes('TOTAL') &&
+                !cleanName.includes('BANK') &&
+                !/\d/.test(cleanName.replace(/[A-Z\s\.\-\']/g, '')) && 
+                cleanLoanAmount.length <= 7) {
+              
+              members.push({
+                name: cleanName,
+                loanAmount: parsedAmount,
+                'loan amount': parsedAmount.toString(),
+                email: email || '',
+                phone: phone || ''
+              });
+              console.log(`✅ Pattern ${patternIndex + 1} (SWAWLAMBAN): ${cleanName} - ₹${parsedAmount.toLocaleString()}`);
+              break;
+            }
+          } else {
+            // For other patterns, use broader validation
+            const cleanName = name.trim();
+            
+            // General validation for all other patterns
+            if (cleanName.length >= 2 && 
+                parsedAmount >= 0 && 
+                parsedAmount <= 50000000 && // Higher limit for general patterns
+                /^[A-Za-z\s\.\-\']+$/.test(cleanName) && // Name should only contain letters, spaces, dots, hyphens, apostrophes
+                !cleanName.toLowerCase().includes('total') &&
+                !cleanName.toLowerCase().includes('grand') &&
+                !cleanName.toLowerCase().includes('amount') &&
+                !cleanName.toLowerCase().includes('sum')) {
+              
+              members.push({
+                name: cleanName,
+                loanAmount: parsedAmount,
+                'loan amount': parsedAmount.toString(),
+                email: email || '',
+                phone: phone || ''
+              });
+              console.log(`✅ Pattern ${patternIndex + 1}: ${cleanName} - ₹${parsedAmount.toLocaleString()}`);
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  console.log(`📊 Pattern detection found ${members.length} members`);
+  
+  const membersWithLoans = members.filter(m => parseInt(m['loan amount']) > 0).length;
+  const membersWithoutLoans = members.length - membersWithLoans;
+  const totalLoanAmount = members.reduce((sum, m) => sum + parseInt(m['loan amount']), 0);
+  
+  return NextResponse.json({
+    success: true,
+    members: members,
+    statistics: {
+      totalMembers: members.length,
+      membersWithLoans,
+      membersWithoutLoans,
+      totalLoanAmount
+    },
+    pages: [members.map(m => `${m.name}\t${m['loan amount']}\t${m.email || ''}\t${m.phone || ''}`).join('\n')],
+    totalPages: 1,
+    text: data.text,
+    headerFound: false,
+    patternDetected: true
+  });
+}
+
+// Enhanced function to parse separated NAME and LOAN sections
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function parseSeparatedSections(lines: string[], data: any) {
+  console.log('🔍 Trying to parse separated NAME and LOAN sections...');
+  
+  let nameHeaderIndex = -1;
+  let loanHeaderIndex = -1;
+  
+  // Look for NAME and LOAN headers with various formats
+  const nameHeaderPatterns = [
+    /^NAME\s*$/i,
+    /^NAMES\s*$/i,
+    /^MEMBER\s*NAME\s*$/i,
+    /^MEMBER\s*NAMES\s*$/i
+  ];
+  
+  const loanHeaderPatterns = [
+    /^LOAN\s*$/i,
+    /^LOANS\s*$/i,
+    /^LOAN\s*AMOUNT\s*$/i,
+    /^AMOUNT\s*$/i
+  ];
+  
+  // Find headers
+  for (let i = 0; i < lines.length; i++) {
+    const lineElement = lines[i];
+    if (!lineElement) continue;
+    const line = lineElement.trim();
+    
+    // Check for name headers
+    for (const pattern of nameHeaderPatterns) {
+      if (pattern.test(line)) {
+        nameHeaderIndex = i;
+        console.log(`📍 Found NAME header at line ${i + 1}: "${line}"`);
+        break;
+      }
+    }
+    
+    // Check for loan headers
+    for (const pattern of loanHeaderPatterns) {
+      if (pattern.test(line)) {
+        loanHeaderIndex = i;
+        console.log(`📍 Found LOAN header at line ${i + 1}: "${line}"`);
+        break;
+      }
+    }
+  }
+  
+  if (nameHeaderIndex === -1 || loanHeaderIndex === -1) {
+    console.log('❌ Could not find both NAME and LOAN headers');
+    return null;
+  }
+  
+  // Extract names between NAME header and LOAN header
+  const names: string[] = [];
+  const namePattern = /^[A-Z][A-Z\s\.\-\']+[A-Z]$/; // Names should be all caps
+  
+  for (let i = nameHeaderIndex + 1; i < loanHeaderIndex; i++) {
+    const lineElement = lines[i];
+    if (!lineElement) continue;
+    const line = lineElement.trim();
+    if (line && namePattern.test(line) && line.length > 2) {
+      names.push(line);
+      console.log(`📛 Found name: "${line}"`);
+    }
+  }
+  
+  // Extract amounts after LOAN header
+  const amounts: number[] = [];
+  const amountPattern = /^\d+$/; // Pure numbers
+  
+  for (let i = loanHeaderIndex + 1; i < lines.length; i++) {
+    const lineElement = lines[i];
+    if (!lineElement) continue;
+    const line = lineElement.trim();
+    
+    // Stop if we encounter text that looks like another section
+    if (/^[A-Z][A-Z\s]+$/.test(line) && line.length > 10) {
+      console.log(`🛑 Stopping at line "${line}" - looks like another section`);
+      break;
+    }
+    
+    if (amountPattern.test(line)) {
+      const amount = parseInt(line);
+      if (amount >= 0 && amount <= 50000000) { // Reasonable range
+        amounts.push(amount);
+        console.log(`💰 Found amount: ${amount.toLocaleString()}`);
+      }
+    }
+  }
+  
+  console.log(`📊 Found ${names.length} names and ${amounts.length} amounts`);
+  
+  if (names.length === 0) {
+    return null;
+  }
+  
+  // Pair names with amounts
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const members: any[] = []; // Complex dynamic structure from PDF parsing
+  const maxLength = Math.max(names.length, amounts.length);
+  
+  for (let i = 0; i < maxLength; i++) {
+    if (i < names.length) {
+      const name = names[i];
+      const amount = i < amounts.length ? amounts[i] : 0;
+      
+      if (name && amount !== undefined) {
+        members.push({
+          name: name,
+          loanAmount: amount,
+          'loan amount': amount.toString(),
+          email: '',
+          phone: ''
+        });
+        
+        console.log(`✅ Paired: "${name}" → ₹${amount.toLocaleString()}`);
+      }
+    }
+  }
+  
+  // Calculate statistics
+  const membersWithLoans = members.filter(m => parseInt(m['loan amount']) > 0).length;
+  const membersWithoutLoans = members.length - membersWithLoans;
+  const totalLoanAmount = members.reduce((sum, m) => sum + parseInt(m['loan amount']), 0);
+  
+  console.log(`📊 Separated sections statistics:`);
+  console.log(`   - Total members: ${members.length}`);
+  console.log(`   - Members with loans: ${membersWithLoans}`);
+  console.log(`   - Members without loans: ${membersWithoutLoans}`);
+  console.log(`   - Total loan amount: ₹${totalLoanAmount.toLocaleString()}`);
+  
+  return NextResponse.json({
+    success: true,
+    members: members,
+    statistics: {
+      totalMembers: members.length,
+      membersWithLoans,
+      membersWithoutLoans,
+      totalLoanAmount
+    },
+    pages: [members.map(m => `${m.name}\t${m['loan amount']}\t${m.email || ''}\t${m.phone || ''}`).join('\n')],
+    totalPages: 1,
+    text: data.text,
+    headerFound: true,
+    formatType: 'separated-sections'
+  });
+}

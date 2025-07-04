@@ -1,0 +1,982 @@
+import { NextResponse } from 'next/server';
+import { prisma } from '@/app/lib/prisma'; 
+import { z } from 'zod';
+import type { Prisma } from '@prisma/client';
+
+// Validation schema for creating a GroupPeriodicRecord
+const groupPeriodicRecordSchema = z.object({
+  meetingDate: z.string().datetime(),
+  recordSequenceNumber: z.number().int().positive().optional().nullable(),
+  totalCollectionThisPeriod: z.number().optional().nullable(),
+  standingAtStartOfPeriod: z.number().optional().nullable(),
+  cashInBankAtEndOfPeriod: z.number().optional().nullable(),
+  cashInHandAtEndOfPeriod: z.number().optional().nullable(),
+  expensesThisPeriod: z.number().optional().nullable(),
+  totalGroupStandingAtEndOfPeriod: z.number().optional().nullable(),
+  interestEarnedThisPeriod: z.number().optional().nullable(),
+  newContributionsThisPeriod: z.number().optional().nullable(),
+  loanProcessingFeesCollectedThisPeriod: z.number().optional().nullable(),
+  lateFinesCollectedThisPeriod: z.number().optional().nullable(),
+  newMembersJoinedThisPeriod: z.number().int().nonnegative().optional().nullable(),
+  sharePerMemberThisPeriod: z.number().nonnegative().optional().nullable(),
+  memberRecords: z.array(z.object({
+    memberId: z.string(),
+    memberName: z.string().optional(), // Added for convenience, not stored in DB directly here
+    compulsoryContribution: z.number().optional().nullable(),
+    loanRepaymentPrincipal: z.number().optional().nullable(),
+    lateFinePaid: z.number().optional().nullable(),
+  })).optional(),
+});
+
+// POST /api/groups/{groupId}/periodic-records
+export async function POST(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id: idFromParams } = await params; 
+  if (!idFromParams) {
+    return NextResponse.json({ error: 'Group ID is required' }, { status: 400 });
+  }
+
+  // Regular expression to check if a string is a valid MongoDB ObjectId
+  // An ObjectId is a 24-character hexadecimal string.
+  const objectIdRegex = /^[0-9a-fA-F]{24}$/;
+
+  try {
+    let group;
+    if (objectIdRegex.test(idFromParams)) {
+      // If idFromParams looks like an ObjectId, try finding by id first
+      group = await prisma.group.findUnique({
+        where: { id: idFromParams },
+      });
+    }
+
+    // If not found by id (or if idFromParams was not an ObjectId), try finding by custom groupId
+    if (!group) {
+      group = await prisma.group.findUnique({
+        where: { groupId: idFromParams }, 
+      });
+    }
+
+    if (!group) {
+      return NextResponse.json({ error: 'Group not found' }, { status: 404 });
+    }
+    const actualGroupId = group.id; // This is the actual ObjectId
+
+    const body = await request.json();
+    const validation = groupPeriodicRecordSchema.safeParse(body);
+
+    if (!validation.success) {
+      return NextResponse.json({ error: 'Invalid input data', details: validation.error.errors }, { status: 400 });
+    }
+
+    const { memberRecords, ...periodicData } = validation.data;
+
+    // Log incoming periodicData for relevant fields
+    console.log('Received periodicData:', JSON.stringify({
+      meetingDate: periodicData.meetingDate,
+      standingAtStartOfPeriod_client: periodicData.standingAtStartOfPeriod,
+      totalGroupStandingAtEndOfPeriod_client: periodicData.totalGroupStandingAtEndOfPeriod,
+      newContributionsThisPeriod_client: periodicData.newContributionsThisPeriod
+    }, null, 2));
+
+    const newRecord = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const newMeetingDate = new Date(periodicData.meetingDate);
+      
+      console.log(`LOG: Using newMeetingDate for queries: ${newMeetingDate.toISOString()}`);
+      
+      // First get all records for this group to understand the current state
+      const allGroupRecords = await tx.groupPeriodicRecord.findMany({
+        where: { groupId: actualGroupId },
+        orderBy: [
+          { meetingDate: 'desc' },
+          { createdAt: 'desc' }
+        ],
+        select: {
+          id: true,
+          meetingDate: true,
+          totalGroupStandingAtEndOfPeriod: true,
+          standingAtStartOfPeriod: true
+        }
+      });
+      
+      console.log(`Found ${allGroupRecords.length} existing records for this group`);
+      console.log('Existing records:', JSON.stringify(allGroupRecords, null, 2));
+
+      // Calculate standingAtStartOfPeriod based on the record immediately preceding this new record's meetingDate
+      const recordBeforeNew = await tx.groupPeriodicRecord.findFirst({
+        where: { 
+          groupId: actualGroupId,
+          meetingDate: { lt: newMeetingDate } 
+        },
+        orderBy: [
+          { meetingDate: 'desc' },
+          { createdAt: 'desc' } // Add secondary sort by creation date for stability
+        ],
+      });
+      
+      console.log('LOG: recordBeforeNew query result:', recordBeforeNew ? JSON.stringify({
+        id: recordBeforeNew.id,
+        meetingDate: recordBeforeNew.meetingDate,
+        totalGroupStandingAtEndOfPeriod: recordBeforeNew.totalGroupStandingAtEndOfPeriod,
+        standingAtStartOfPeriod: recordBeforeNew.standingAtStartOfPeriod
+      }, null, 2) : 'None found (recordBeforeNew is null or undefined)');
+      
+      // Check if records exist but none have a date before the new record's date
+      const isFirstChronologicalRecord = allGroupRecords.length > 0 && !recordBeforeNew;
+      console.log(`LOG: isFirstChronologicalRecord: ${isFirstChronologicalRecord}`);
+
+      if (isFirstChronologicalRecord) {
+        console.log('This is the chronologically earliest record, but other records exist');
+      }
+      
+      // If no record found or this is chronologically the first record, try to get the latest record by creation date
+      const latestRecord = isFirstChronologicalRecord ? 
+        await tx.groupPeriodicRecord.findFirst({
+          where: { groupId: actualGroupId },
+          orderBy: { createdAt: 'desc' }
+        }) : null;
+        
+      console.log('LOG: latestRecord (if isFirstChronologicalRecord was true):', latestRecord ? JSON.stringify({
+        id: latestRecord.id,
+        meetingDate: latestRecord.meetingDate,
+        totalGroupStandingAtEndOfPeriod: latestRecord.totalGroupStandingAtEndOfPeriod
+      }, null, 2) : 'Not applicable or latestRecord is null');
+      
+      // For accurate financial calculations, use the most recent periodic record's ending balance
+      // This ensures we're working with the most up-to-date financial state
+      const mostRecentRecord = await tx.groupPeriodicRecord.findFirst({
+        where: { groupId: actualGroupId },
+        orderBy: [
+          { meetingDate: 'desc' },
+          { createdAt: 'desc' }
+        ],
+        select: { 
+          totalGroupStandingAtEndOfPeriod: true,
+          meetingDate: true,
+          id: true
+        }
+      });
+      
+      let calculatedStandingAtStartOfPeriod;
+      
+      if (mostRecentRecord) {
+        // Use previous record's ending balance
+        calculatedStandingAtStartOfPeriod = mostRecentRecord.totalGroupStandingAtEndOfPeriod ?? 0;
+      } else {
+        // This is the first record - calculate initial standing from group's cash + loan assets
+        const groupData = await tx.group.findUnique({
+          where: { id: actualGroupId },
+          select: {
+            cashInHand: true,
+            balanceInBank: true,
+            memberships: {
+              select: {
+                currentLoanAmount: true,
+                member: {
+                  select: {
+                    loans: {
+                      where: {
+                        groupId: actualGroupId,
+                        status: 'ACTIVE'
+                      },
+                      select: {
+                        currentBalance: true
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        });
+        
+        if (groupData) {
+          const totalCash = (groupData.cashInHand || 0) + (groupData.balanceInBank || 0);
+          
+          // Calculate total loan assets - prioritize active loans, fall back to membership amounts
+          let totalLoanAssets = 0;
+          for (const membership of groupData.memberships) {
+            const activeLoanBalance = membership.member.loans.reduce((sum, loan) => sum + loan.currentBalance, 0);
+            if (activeLoanBalance > 0) {
+              totalLoanAssets += activeLoanBalance;
+            } else if (membership.currentLoanAmount && membership.currentLoanAmount > 0) {
+              totalLoanAssets += membership.currentLoanAmount;
+            }
+          }
+          
+          calculatedStandingAtStartOfPeriod = totalCash + totalLoanAssets;
+          console.log(`First record - calculated initial standing: cash=${totalCash} + loans=${totalLoanAssets} = ${calculatedStandingAtStartOfPeriod}`);
+        } else {
+          calculatedStandingAtStartOfPeriod = 0;
+        }
+      }
+      
+      console.log(`LOG: Using calculated starting balance: ${calculatedStandingAtStartOfPeriod}`);
+      console.log(`LOG: Most recent record: ${mostRecentRecord ? `ID: ${mostRecentRecord.id}, Date: ${mostRecentRecord.meetingDate}` : 'None found (first record)'}`);
+
+      // Calculate recordSequenceNumber by incrementing the highest current sequence number for this group
+      const latestBySeqNum = await tx.groupPeriodicRecord.findFirst({
+        where: { groupId: actualGroupId },
+        orderBy: { recordSequenceNumber: 'desc' }, // Ensure this field is indexed for performance
+      });
+      const nextRecordSequenceNumber = (latestBySeqNum?.recordSequenceNumber ?? 0) + 1;
+      console.log(`Next record sequence number: ${nextRecordSequenceNumber}`);
+      
+      // Initialize financial aggregates for the current period
+      let currentPeriodContributions = periodicData.newContributionsThisPeriod ?? 0;
+      let currentPeriodLoanRepaymentPrincipal = 0;
+      const currentPeriodMemberLoanInterest = 0; 
+      let currentPeriodLateFines = periodicData.lateFinesCollectedThisPeriod ?? 0;
+
+      if (memberRecords && memberRecords.length > 0) {
+        currentPeriodContributions = memberRecords.reduce((sum, mr) => sum + (mr.compulsoryContribution ?? 0), 0);
+        currentPeriodLoanRepaymentPrincipal = memberRecords.reduce((sum, mr) => sum + (mr.loanRepaymentPrincipal ?? 0), 0);
+        currentPeriodLateFines = memberRecords.reduce((sum, mr) => sum + (mr.lateFinePaid ?? 0), 0);
+      }
+
+      const groupLoanProcessingFees = periodicData.loanProcessingFeesCollectedThisPeriod ?? 0;
+      const groupExpenses = periodicData.expensesThisPeriod ?? 0;
+
+      // Calculate total interest earned this period for storage (now using the manual input value)
+      const calculatedInterestEarnedThisPeriod = periodicData.interestEarnedThisPeriod ?? 0;
+
+      // Calculate total inflows and outflows for the period
+      // NOTE: Loan repayments are NOT included in inflows since they don't increase total group standing
+      // They convert loan assets to cash (internal transfer within group standing)
+      const inflows = currentPeriodContributions +
+                      currentPeriodMemberLoanInterest + // Member loan interest
+                      groupLoanProcessingFees +
+                      currentPeriodLateFines +
+                      calculatedInterestEarnedThisPeriod; // Manual interest input
+
+      const outflows = groupExpenses;
+
+      // Calculate starting cash balance (separate from total standing which includes loans)
+      let startingCashBalance = 0;
+      if (mostRecentRecord) {
+        // For subsequent records, get previous period's cash allocation
+        const previousRecord = await tx.groupPeriodicRecord.findUnique({
+          where: { id: mostRecentRecord.id },
+          select: {
+            cashInBankAtEndOfPeriod: true,
+            cashInHandAtEndOfPeriod: true
+          }
+        });
+        if (previousRecord) {
+          startingCashBalance = (previousRecord.cashInBankAtEndOfPeriod || 0) + (previousRecord.cashInHandAtEndOfPeriod || 0);
+        }
+      } else {
+        // For first record, use group's initial cash
+        const groupData = await tx.group.findUnique({
+          where: { id: actualGroupId },
+          select: {
+            cashInHand: true,
+            balanceInBank: true
+          }
+        });
+        if (groupData) {
+          startingCashBalance = (groupData.cashInHand || 0) + (groupData.balanceInBank || 0);
+        }
+      }
+
+      // Calculate cash balance based on cash flows only (not total standing)
+      // Loan repayments increase cash but don't affect total group standing
+      const calculatedCashBalanceAtEndOfPeriod = startingCashBalance + inflows - outflows + currentPeriodLoanRepaymentPrincipal;
+      
+      console.log(`Final financial calculations (after loan updates):`);
+      console.log(` - Starting standing: ${calculatedStandingAtStartOfPeriod}`);
+      console.log(` - Inflows (excluding loan repayments): ${inflows}`);
+      console.log(` - Outflows: ${outflows}`);
+      console.log(` - Net change: ${inflows - outflows}`);
+      console.log(` - Cash balance (including loan repayments): ${calculatedCashBalanceAtEndOfPeriod}`);
+      console.log(` - Total loan assets (after repayments): ${totalLoanAssets}`);
+      console.log(` - Total group standing (Cash + Loan Assets): ${calculatedTotalGroupStandingAtEndOfPeriod}`);
+
+      // Now create the periodic record with correct financial data
+      const dataForCreate: Prisma.GroupPeriodicRecordUncheckedCreateInput = {
+        groupId: actualGroupId,
+        meetingDate: newMeetingDate,
+        recordSequenceNumber: nextRecordSequenceNumber,
+        
+        // Financial data - override with our calculated values
+        standingAtStartOfPeriod: calculatedStandingAtStartOfPeriod,
+        totalGroupStandingAtEndOfPeriod: calculatedTotalGroupStandingAtEndOfPeriod,
+        
+        // Income details - override with our calculated values
+        newContributionsThisPeriod: currentPeriodContributions,
+        interestEarnedThisPeriod: calculatedInterestEarnedThisPeriod,
+        lateFinesCollectedThisPeriod: currentPeriodLateFines,
+        loanInterestRepaymentsThisPeriod: currentPeriodMemberLoanInterest,
+        loanProcessingFeesCollectedThisPeriod: groupLoanProcessingFees,
+        
+        // Totals and expenses - use existing or set to zero if not provided
+        totalCollectionThisPeriod: inflows,
+        expensesThisPeriod: groupExpenses,
+        
+        // Cash distribution - now correctly derived
+        cashInBankAtEndOfPeriod: finalCashInBankAtEndOfPeriod,
+        cashInHandAtEndOfPeriod: finalCashInHandAtEndOfPeriod
+      };
+      
+      console.log(`Data to be saved:`, JSON.stringify(dataForCreate, null, 2));
+
+      const createdRecord = await tx.groupPeriodicRecord.create({
+        data: dataForCreate,
+      });
+      
+      console.log(`Created record:`, JSON.stringify({
+        id: createdRecord.id,
+        meetingDate: createdRecord.meetingDate,
+        standingAtStartOfPeriod: createdRecord.standingAtStartOfPeriod,
+        totalGroupStandingAtEndOfPeriod: createdRecord.totalGroupStandingAtEndOfPeriod
+      }, null, 2));
+
+      // Now create the member records linked to the main record
+      if (memberRecords && memberRecords.length > 0) {
+        await tx.groupMemberPeriodicRecord.createMany({
+          data: memberRecords.map(mr => {
+            const { memberName: _memberName, ...rest } = mr; // Destructure to remove memberName
+            return {
+              groupPeriodicRecordId: createdRecord.id,
+              memberId: rest.memberId,
+              compulsoryContribution: rest.compulsoryContribution !== undefined ? rest.compulsoryContribution : null,
+              loanRepaymentPrincipal: rest.loanRepaymentPrincipal !== undefined ? rest.loanRepaymentPrincipal : null,
+              lateFinePaid: rest.lateFinePaid !== undefined ? rest.lateFinePaid : null,
+            };
+          })
+        });
+
+        // Create MemberContribution records with calculated loan interest
+        console.log('Creating MemberContribution records with loan interest...');
+        
+        // Get group data for interest calculation
+        const groupData = await tx.group.findUnique({
+          where: { id: actualGroupId },
+          select: {
+            interestRate: true,
+            collectionFrequency: true,
+            monthlyContribution: true,
+          }
+        });
+
+        const interestRate = groupData?.interestRate || 0;
+        const collectionFrequency = groupData?.collectionFrequency || 'MONTHLY';
+        const monthlyContribution = groupData?.monthlyContribution || 0;
+
+        // Calculate period interest rate
+        let periodsPerYear = 12; // Default to monthly
+        switch (collectionFrequency) {
+          case 'WEEKLY':
+            periodsPerYear = 52;
+            break;
+          case 'FORTNIGHTLY':
+            periodsPerYear = 26;
+            break;
+          case 'MONTHLY':
+            periodsPerYear = 12;
+            break;
+          case 'YEARLY':
+            periodsPerYear = 1;
+            break;
+        }
+        const periodInterestRate = (interestRate / 100) / periodsPerYear;
+
+        // Get all memberships with loan data in one query
+        const membershipsWithLoanData = await tx.memberGroupMembership.findMany({
+          where: {
+            groupId: actualGroupId
+          },
+          include: {
+            member: {
+              include: {
+                loans: {
+                  where: {
+                    groupId: actualGroupId,
+                    status: 'ACTIVE'
+                  }
+                }
+              }
+            }
+          }
+        });
+
+        // Calculate total loan assets - prioritize active loans, fall back to initial loan amounts
+        let totalLoanAssets = 0;
+        for (const membership of membershipsWithLoanData) {
+          // If member has active loans, use current balance
+          if (membership.member.loans.length > 0) {
+            const memberActiveLoanBalance = membership.member.loans.reduce((sum, loan) => sum + loan.currentBalance, 0);
+            totalLoanAssets += memberActiveLoanBalance;
+          } 
+          // If no active loans but has current loan amount, include that
+          else if (membership.currentLoanAmount && membership.currentLoanAmount > 0) {
+            totalLoanAssets += membership.currentLoanAmount;
+          }
+        }
+
+      // DEBUGGING LOGS FOR PERIOD CLOSING ISSUES
+      console.log('\n🔍 DEBUGGING TOTAL STANDING CALCULATION:');
+      console.log('================================================');
+      console.log(`📅 Meeting Date: ${newMeetingDate.toISOString()}`);
+      console.log(`📋 Is First Record: ${!mostRecentRecord}`);
+      console.log(`💰 Calculated Cash Balance: ₹${calculatedCashBalanceAtEndOfPeriod}`);
+      console.log(`   - Starting Cash Balance: ₹${startingCashBalance}`);
+      console.log(`   - Inflows: ₹${inflows}`);
+      console.log(`   - Outflows: ₹${outflows}`);
+      console.log(`   - Loan Repayments (cash increase): ₹${currentPeriodLoanRepaymentPrincipal}`);
+      console.log(`💳 Total Loan Assets: ₹${totalLoanAssets}`);
+      console.log(`   - Number of memberships checked: ${membershipsWithLoanData.length}`);
+      
+      // Log detailed loan asset breakdown
+      let activeLoansTotal = 0;
+      let membershipLoansTotal = 0;
+      console.log(`📊 Loan Assets Breakdown:`);
+      membershipsWithLoanData.forEach(membership => {
+        const memberActiveLoans = membership.member.loans.reduce((sum, loan) => sum + loan.currentBalance, 0);
+        const membershipLoan = membership.currentLoanAmount || 0;
+        
+        if (memberActiveLoans > 0 || membershipLoan > 0) {
+          console.log(`   ${membership.member.name}:`);
+          console.log(`     - Active loans: ₹${memberActiveLoans}`);
+          console.log(`     - Membership loan: ₹${membershipLoan}`);
+          console.log(`     - Used value: ₹${memberActiveLoans > 0 ? memberActiveLoans : membershipLoan}`);
+        }
+        
+        activeLoansTotal += memberActiveLoans;
+        membershipLoansTotal += membershipLoan;
+      });
+      console.log(`   📈 Active loans total: ₹${activeLoansTotal}`);
+      console.log(`   📈 Membership loans total: ₹${membershipLoansTotal}`);
+
+      // Calculate total group standing correctly
+      // Total Standing = Cash in Hand + Cash in Bank + Total Loan Assets
+      // This ensures accurate calculation based on actual current assets
+      const calculatedTotalGroupStandingAtEndOfPeriod = calculatedCashBalanceAtEndOfPeriod + totalLoanAssets;
+      
+      console.log(`Final financial calculations (after loan updates):`);
+      console.log(` - Starting standing: ${calculatedStandingAtStartOfPeriod}`);
+      console.log(` - Inflows (excluding loan repayments): ${inflows}`);
+      console.log(` - Outflows: ${outflows}`);
+      console.log(` - Net change: ${inflows - outflows}`);
+      console.log(` - Cash balance (including loan repayments): ${calculatedCashBalanceAtEndOfPeriod}`);
+      console.log(` - Total loan assets (after repayments): ${totalLoanAssets}`);
+      console.log(` - Total group standing (Cash + Loan Assets): ${calculatedTotalGroupStandingAtEndOfPeriod}`);
+
+      // Now create the periodic record with correct financial data
+      const dataForCreate: Prisma.GroupPeriodicRecordUncheckedCreateInput = {
+        groupId: actualGroupId,
+        meetingDate: newMeetingDate,
+        recordSequenceNumber: nextRecordSequenceNumber,
+        
+        // Financial data - override with our calculated values
+        standingAtStartOfPeriod: calculatedStandingAtStartOfPeriod,
+        totalGroupStandingAtEndOfPeriod: calculatedTotalGroupStandingAtEndOfPeriod,
+        
+        // Income details - override with our calculated values
+        newContributionsThisPeriod: currentPeriodContributions,
+        interestEarnedThisPeriod: calculatedInterestEarnedThisPeriod,
+        lateFinesCollectedThisPeriod: currentPeriodLateFines,
+        loanInterestRepaymentsThisPeriod: currentPeriodMemberLoanInterest,
+        loanProcessingFeesCollectedThisPeriod: groupLoanProcessingFees,
+        
+        // Totals and expenses - use existing or set to zero if not provided
+        totalCollectionThisPeriod: inflows,
+        expensesThisPeriod: groupExpenses,
+        
+        // Cash distribution - now correctly derived
+        cashInBankAtEndOfPeriod: finalCashInBankAtEndOfPeriod,
+        cashInHandAtEndOfPeriod: finalCashInHandAtEndOfPeriod
+      };
+      
+      console.log(`Data to be saved:`, JSON.stringify(dataForCreate, null, 2));
+
+      const createdRecord = await tx.groupPeriodicRecord.create({
+        data: dataForCreate,
+      });
+      
+      console.log(`Created record:`, JSON.stringify({
+        id: createdRecord.id,
+        meetingDate: createdRecord.meetingDate,
+        standingAtStartOfPeriod: createdRecord.standingAtStartOfPeriod,
+        totalGroupStandingAtEndOfPeriod: createdRecord.totalGroupStandingAtEndOfPeriod
+      }, null, 2));
+
+      // Now create the member records linked to the main record
+      if (memberRecords && memberRecords.length > 0) {
+        await tx.groupMemberPeriodicRecord.createMany({
+          data: memberRecords.map(mr => {
+            const { memberName: _memberName, ...rest } = mr; // Destructure to remove memberName
+            return {
+              groupPeriodicRecordId: createdRecord.id,
+              memberId: rest.memberId,
+              compulsoryContribution: rest.compulsoryContribution !== undefined ? rest.compulsoryContribution : null,
+              loanRepaymentPrincipal: rest.loanRepaymentPrincipal !== undefined ? rest.loanRepaymentPrincipal : null,
+              lateFinePaid: rest.lateFinePaid !== undefined ? rest.lateFinePaid : null,
+            };
+          })
+        });
+
+        // Create MemberContribution records with calculated loan interest
+        console.log('Creating MemberContribution records with loan interest...');
+        
+        // Get group data for interest calculation
+        const groupData = await tx.group.findUnique({
+          where: { id: actualGroupId },
+          select: {
+            interestRate: true,
+            collectionFrequency: true,
+            monthlyContribution: true,
+          }
+        });
+
+        const interestRate = groupData?.interestRate || 0;
+        const collectionFrequency = groupData?.collectionFrequency || 'MONTHLY';
+        const monthlyContribution = groupData?.monthlyContribution || 0;
+
+        // Calculate period interest rate
+        let periodsPerYear = 12; // Default to monthly
+        switch (collectionFrequency) {
+          case 'WEEKLY':
+            periodsPerYear = 52;
+            break;
+          case 'FORTNIGHTLY':
+            periodsPerYear = 26;
+            break;
+          case 'MONTHLY':
+            periodsPerYear = 12;
+            break;
+          case 'YEARLY':
+            periodsPerYear = 1;
+            break;
+        }
+        const periodInterestRate = (interestRate / 100) / periodsPerYear;
+
+        // Get all memberships with loan data in one query
+        const membershipsWithLoanData = await tx.memberGroupMembership.findMany({
+          where: {
+            groupId: actualGroupId
+          },
+          include: {
+            member: {
+              include: {
+                loans: {
+                  where: {
+                    groupId: actualGroupId,
+                    status: 'ACTIVE'
+                  }
+                }
+              }
+            }
+          }
+        });
+
+        // Calculate total loan assets - prioritize active loans, fall back to initial loan amounts
+        let totalLoanAssets = 0;
+        for (const membership of membershipsWithLoanData) {
+          // If member has active loans, use current balance
+          if (membership.member.loans.length > 0) {
+            const memberActiveLoanBalance = membership.member.loans.reduce((sum, loan) => sum + loan.currentBalance, 0);
+            totalLoanAssets += memberActiveLoanBalance;
+          } 
+          // If no active loans but has current loan amount, include that
+          else if (membership.currentLoanAmount && membership.currentLoanAmount > 0) {
+            totalLoanAssets += membership.currentLoanAmount;
+          }
+        }
+
+      // DEBUGGING LOGS FOR PERIOD CLOSING ISSUES
+      console.log('\n🔍 DEBUGGING TOTAL STANDING CALCULATION:');
+      console.log('================================================');
+      console.log(`📅 Meeting Date: ${newMeetingDate.toISOString()}`);
+      console.log(`📋 Is First Record: ${!mostRecentRecord}`);
+      console.log(`💰 Calculated Cash Balance: ₹${calculatedCashBalanceAtEndOfPeriod}`);
+      console.log(`   - Starting Cash Balance: ₹${startingCashBalance}`);
+      console.log(`   - Inflows: ₹${inflows}`);
+      console.log(`   - Outflows: ₹${outflows}`);
+      console.log(`   - Loan Repayments (cash increase): ₹${currentPeriodLoanRepaymentPrincipal}`);
+      console.log(`💳 Total Loan Assets: ₹${totalLoanAssets}`);
+      console.log(`   - Number of memberships checked: ${membershipsWithLoanData.length}`);
+      
+      // Log detailed loan asset breakdown
+      let activeLoansTotal = 0;
+      let membershipLoansTotal = 0;
+      console.log(`📊 Loan Assets Breakdown:`);
+      membershipsWithLoanData.forEach(membership => {
+        const memberActiveLoans = membership.member.loans.reduce((sum, loan) => sum + loan.currentBalance, 0);
+        const membershipLoan = membership.currentLoanAmount || 0;
+        
+        if (memberActiveLoans > 0 || membershipLoan > 0) {
+          console.log(`   ${membership.member.name}:`);
+          console.log(`     - Active loans: ₹${memberActiveLoans}`);
+          console.log(`     - Membership loan: ₹${membershipLoan}`);
+          console.log(`     - Used value: ₹${memberActiveLoans > 0 ? memberActiveLoans : membershipLoan}`);
+        }
+        
+        activeLoansTotal += memberActiveLoans;
+        membershipLoansTotal += membershipLoan;
+      });
+      console.log(`   📈 Active loans total: ₹${activeLoansTotal}`);
+      console.log(`   📈 Membership loans total: ₹${membershipLoansTotal}`);
+
+      // Calculate total group standing correctly
+      // Total Standing = Cash in Hand + Cash in Bank + Total Loan Assets
+      // This ensures accurate calculation based on actual current assets
+      const calculatedTotalGroupStandingAtEndOfPeriod = calculatedCashBalanceAtEndOfPeriod + totalLoanAssets;
+      
+      console.log(`Final financial calculations (after loan updates):`);
+      console.log(` - Starting standing: ${calculatedStandingAtStartOfPeriod}`);
+      console.log(` - Inflows (excluding loan repayments): ${inflows}`);
+      console.log(` - Outflows: ${outflows}`);
+      console.log(` - Net change: ${inflows - outflows}`);
+      console.log(` - Cash balance (including loan repayments): ${calculatedCashBalanceAtEndOfPeriod}`);
+      console.log(` - Total loan assets (after repayments): ${totalLoanAssets}`);
+      console.log(` - Total group standing (Cash + Loan Assets): ${calculatedTotalGroupStandingAtEndOfPeriod}`);
+
+      // Now create the periodic record with correct financial data
+      const dataForCreate: Prisma.GroupPeriodicRecordUncheckedCreateInput = {
+        groupId: actualGroupId,
+        meetingDate: newMeetingDate,
+        recordSequenceNumber: nextRecordSequenceNumber,
+        
+        // Financial data - override with our calculated values
+        standingAtStartOfPeriod: calculatedStandingAtStartOfPeriod,
+        totalGroupStandingAtEndOfPeriod: calculatedTotalGroupStandingAtEndOfPeriod,
+        
+        // Income details - override with our calculated values
+        newContributionsThisPeriod: currentPeriodContributions,
+        interestEarnedThisPeriod: calculatedInterestEarnedThisPeriod,
+        lateFinesCollectedThisPeriod: currentPeriodLateFines,
+        loanInterestRepaymentsThisPeriod: currentPeriodMemberLoanInterest,
+        loanProcessingFeesCollectedThisPeriod: groupLoanProcessingFees,
+        
+        // Totals and expenses - use existing or set to zero if not provided
+        totalCollectionThisPeriod: inflows,
+        expensesThisPeriod: groupExpenses,
+        
+        // Cash distribution - now correctly derived
+        cashInBankAtEndOfPeriod: finalCashInBankAtEndOfPeriod,
+        cashInHandAtEndOfPeriod: finalCashInHandAtEndOfPeriod
+      };
+      
+      console.log(`Data to be saved:`, JSON.stringify(dataForCreate, null, 2));
+
+      const createdRecord = await tx.groupPeriodicRecord.create({
+        data: dataForCreate,
+      });
+      
+      console.log(`Created record:`, JSON.stringify({
+        id: createdRecord.id,
+        meetingDate: createdRecord.meetingDate,
+        standingAtStartOfPeriod: createdRecord.standingAtStartOfPeriod,
+        totalGroupStandingAtEndOfPeriod: createdRecord.totalGroupStandingAtEndOfPeriod
+      }, null, 2));
+
+      // Now create the member records linked to the main record
+      if (memberRecords && memberRecords.length > 0) {
+        await tx.groupMemberPeriodicRecord.createMany({
+          data: memberRecords.map(mr => {
+            const { memberName: _memberName, ...rest } = mr; // Destructure to remove memberName
+            return {
+              groupPeriodicRecordId: createdRecord.id,
+              memberId: rest.memberId,
+              compulsoryContribution: rest.compulsoryContribution !== undefined ? rest.compulsoryContribution : null,
+              loanRepaymentPrincipal: rest.loanRepaymentPrincipal !== undefined ? rest.loanRepaymentPrincipal : null,
+              lateFinePaid: rest.lateFinePaid !== undefined ? rest.lateFinePaid : null,
+            };
+          })
+        });
+
+        // Create MemberContribution records with calculated loan interest
+        console.log('Creating MemberContribution records with loan interest...');
+        
+        // Get group data for interest calculation
+        const groupData = await tx.group.findUnique({
+          where: { id: actualGroupId },
+          select: {
+            interestRate: true,
+            collectionFrequency: true,
+            monthlyContribution: true,
+          }
+        });
+
+        const interestRate = groupData?.interestRate || 0;
+        const collectionFrequency = groupData?.collectionFrequency || 'MONTHLY';
+        const monthlyContribution = groupData?.monthlyContribution || 0;
+
+        // Calculate period interest rate
+        let periodsPerYear = 12; // Default to monthly
+        switch (collectionFrequency) {
+          case 'WEEKLY':
+            periodsPerYear = 52;
+            break;
+          case 'FORTNIGHTLY':
+            periodsPerYear = 26;
+            break;
+          case 'MONTHLY':
+            periodsPerYear = 12;
+            break;
+          case 'YEARLY':
+            periodsPerYear = 1;
+            break;
+        }
+        const periodInterestRate = (interestRate / 100) / periodsPerYear;
+
+        // Get all memberships with loan data in one query
+        const membershipsWithLoanData = await tx.memberGroupMembership.findMany({
+          where: {
+            groupId: actualGroupId
+          },
+          include: {
+            member: {
+              include: {
+                loans: {
+                  where: {
+                    groupId: actualGroupId,
+                    status: 'ACTIVE'
+                  }
+                }
+              }
+            }
+          }
+        });
+
+        // Create membership lookup map for efficiency
+        const membershipMap = new Map();
+        membershipsWithLoanData.forEach(membership => {
+          membershipMap.set(membership.memberId, membership);
+        });
+
+        // Prepare member contribution data
+        const memberContributionData = memberRecords.map(memberRecord => {
+          const membership = membershipMap.get(memberRecord.memberId);
+          
+          let currentLoanBalance = 0;
+          if (membership) {
+            // Calculate current loan balance (prioritize active loans, fallback to membership amount)
+            const activeLoanBalance = membership.member.loans?.reduce((total: number, loan: any) => total + loan.currentBalance, 0) || 0;
+            currentLoanBalance = activeLoanBalance > 0 ? activeLoanBalance : (membership.currentLoanAmount || 0);
+          }
+
+          // Calculate loan interest due for this period
+          const loanInterestDue = currentLoanBalance * periodInterestRate;
+
+          return {
+            groupPeriodicRecordId: createdRecord.id,
+            memberId: memberRecord.memberId,
+            compulsoryContributionDue: monthlyContribution,
+            loanInterestDue: loanInterestDue,
+            minimumDueAmount: monthlyContribution + loanInterestDue,
+            compulsoryContributionPaid: memberRecord.compulsoryContribution || 0,
+            loanInterestPaid: 0, // This would need to be tracked separately
+            lateFinePaid: memberRecord.lateFinePaid || 0,
+            totalPaid: (memberRecord.compulsoryContribution || 0) + (memberRecord.lateFinePaid || 0),
+            status: 'PENDING' as const, // Default status
+            dueDate: newMeetingDate, // Use the meeting date as the due date
+            remainingAmount: Math.max(0, (monthlyContribution + loanInterestDue) - ((memberRecord.compulsoryContribution || 0) + (memberRecord.lateFinePaid || 0))),
+          };
+        });
+
+        // Create all member contribution records
+        if (memberContributionData.length > 0) {
+          await tx.memberContribution.createMany({
+            data: memberContributionData
+          });
+          
+          const totalLoanInterest = memberContributionData.reduce((sum, mcd) => sum + mcd.loanInterestDue, 0);
+          console.log(`Created ${memberContributionData.length} MemberContribution records with total loan interest ₹${totalLoanInterest.toFixed(2)}`);
+        }
+      }
+      
+      return tx.groupPeriodicRecord.findUnique({
+        where: { id: createdRecord.id },
+        include: { memberRecords: true }, 
+      });
+    });
+
+    return NextResponse.json(newRecord, { status: 201 });
+  } catch (error) {
+    console.error("Failed to create periodic record:", error);
+    if (error instanceof Error && 'code' in error && error.code === 'P2002') {
+         return NextResponse.json({ error: 'A record for this meeting date already exists for this group.' }, { status: 409 });
+    }
+    return NextResponse.json({ error: `Failed to create periodic record: ${error instanceof Error ? error.message : String(error)}` }, { status: 500 });
+  }
+}
+
+// Special function to recalculate and update all record standings for a group
+// This ensures proper accumulation when records are added out of order
+export async function PATCH(
+  _request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id: idFromParams } = await params;
+  if (!idFromParams) {
+    return NextResponse.json({ error: 'Group ID is required' }, { status: 400 });
+  }
+
+  try {
+    // Get the group ID (same code as in POST and GET)
+    const objectIdRegex = /^[0-9a-fA-F]{24}$/;
+    let group;
+    if (objectIdRegex.test(idFromParams)) {
+      group = await prisma.group.findUnique({
+        where: { id: idFromParams },
+      });
+    }
+    if (!group) {
+      group = await prisma.group.findUnique({
+        where: { groupId: idFromParams },
+      });
+    }
+    if (!group) {
+      return NextResponse.json({ error: 'Group not found' }, { status: 404 });
+    }
+    const actualGroupId = group.id;
+
+    // Get all records for the group, ordered by meeting date
+    const records = await prisma.groupPeriodicRecord.findMany({
+      where: { groupId: actualGroupId },
+      orderBy: { meetingDate: 'asc' },
+      include: { memberRecords: true }
+    });
+
+    console.log(`Recalculating standings for ${records.length} records`);
+
+    // Recalculate standings for all records in chronological order
+    let runningTotal = 0;
+    let updatedRecords = 0;
+    
+    for (const record of records) {
+      // Set standingAtStartOfPeriod to current running total
+      const standingAtStartOfPeriod = runningTotal;
+      
+      // Calculate inflows and outflows  
+      // NOTE: Loan repayments are NOT counted as inflows since they don't increase total group standing
+      const contributions = record.newContributionsThisPeriod ?? 0;
+      const memberLoanInterest = record.loanInterestRepaymentsThisPeriod ?? 0;
+      const processingFees = record.loanProcessingFeesCollectedThisPeriod ?? 0;
+      const lateFines = record.lateFinesCollectedThisPeriod ?? 0;
+      const externalInterest = record.interestEarnedThisPeriod 
+        ? record.interestEarnedThisPeriod - memberLoanInterest 
+        : 0;
+      const expenses = record.expensesThisPeriod ?? 0;
+      
+      // Calculate loan principal from member records if available (for cash balance calculation only)
+      // loanPrincipal is calculated but not used in the current implementation
+      // let loanPrincipal = 0;
+      // if (record.memberRecords?.length > 0) {
+      //   loanPrincipal = record.memberRecords.reduce(
+      //     (sum, mr) => sum + (mr.loanRepaymentPrincipal ?? 0), 
+      //     0
+      //   );
+      // }
+      
+      // Inflows exclude loan repayments as they don't change total group standing
+      const inflows = contributions + memberLoanInterest + 
+                      processingFees + lateFines + externalInterest;
+      const outflows = expenses;
+      
+      // Calculate new total (loan repayments are internal transfers, don't affect group standing)
+      const totalGroupStandingAtEndOfPeriod = standingAtStartOfPeriod + inflows - outflows;
+      
+      // Update the running total for the next record
+      runningTotal = totalGroupStandingAtEndOfPeriod;
+      
+      // Only update if values have changed
+      if (record.standingAtStartOfPeriod !== standingAtStartOfPeriod ||
+          record.totalGroupStandingAtEndOfPeriod !== totalGroupStandingAtEndOfPeriod) {
+        
+        await prisma.groupPeriodicRecord.update({
+          where: { id: record.id },
+          data: {
+            standingAtStartOfPeriod,
+            totalGroupStandingAtEndOfPeriod
+          }
+        });
+        
+        updatedRecords++;
+      }
+    }
+
+    return NextResponse.json({ 
+      message: `Recalculated standings for ${records.length} records, updated ${updatedRecords} records`,
+      finalStanding: runningTotal
+    });
+    
+  } catch (error) {
+    console.error("Failed to recalculate periodic records:", error);
+    return NextResponse.json(
+      { error: `Failed to recalculate periodic records: ${error instanceof Error ? error.message : String(error)}` }, 
+      { status: 500 }
+    );
+  }
+}
+
+// GET /api/groups/{groupId}/periodic-records
+export async function GET(
+  _request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id: idFromParams } = await params; 
+  if (!idFromParams) {
+    return NextResponse.json({ error: 'Group ID is required' }, { status: 400 });
+  }
+
+  try {
+    // Try to find the group by ObjectId first, then by custom groupId
+    let group = await prisma.group.findUnique({
+      where: { id: idFromParams },
+    });
+
+    if (!group) {
+      group = await prisma.group.findUnique({
+        where: { groupId: idFromParams }, // Fallback to custom groupId
+      });
+    }
+
+    if (!group) {
+      return NextResponse.json({ error: 'Group not found' }, { status: 404 });
+    }
+    const actualGroupId = group.id; // This is the actual ObjectId
+
+    const records = await prisma.groupPeriodicRecord.findMany({
+      where: { groupId: actualGroupId }, // Use the actual ObjectId for querying
+      orderBy: [
+        { meetingDate: 'desc' },
+        { recordSequenceNumber: 'desc' } // Add secondary sort by sequence number
+      ], 
+      select: {
+        id: true,
+        meetingDate: true,
+        recordSequenceNumber: true,
+        standingAtStartOfPeriod: true,
+        totalGroupStandingAtEndOfPeriod: true,
+        newContributionsThisPeriod: true,
+        interestEarnedThisPeriod: true,
+        lateFinesCollectedThisPeriod: true,
+        loanProcessingFeesCollectedThisPeriod: true,
+        expensesThisPeriod: true,
+        cashInBankAtEndOfPeriod: true,
+        cashInHandAtEndOfPeriod: true,
+        membersPresent: true, // Added membersPresent
+        createdAt: true,
+        updatedAt: true,
+      }
+    });
+
+    console.log(`GET records - Found ${records.length} records for group ${idFromParams}`);
+    console.log('Records summary:', records.map(r => ({
+      id: r.id,
+      meetingDate: r.meetingDate,
+      recordSequenceNumber: r.recordSequenceNumber,
+      standingAtStartOfPeriod: r.standingAtStartOfPeriod,
+      totalGroupStandingAtEndOfPeriod: r.totalGroupStandingAtEndOfPeriod
+    })));
+
+    return NextResponse.json(records);
+  } catch (error) {
+    console.error("Failed to fetch periodic records:", error);
+    return NextResponse.json({ error: 'Failed to fetch periodic records' }, { status: 500 });
+  }
+}

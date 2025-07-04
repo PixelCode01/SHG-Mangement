@@ -1,0 +1,2678 @@
+'use client';
+
+import { useState, useEffect, useCallback } from 'react';
+import { useParams } from 'next/navigation';
+import { useSession } from 'next-auth/react';
+import Link from 'next/link';
+
+// Type declaration for jspdf-autotable
+declare module 'jspdf' {
+  interface jsPDF {
+    lastAutoTable: {
+      finalY: number;
+    };
+  }
+}
+
+interface GroupMember {
+  id: string;
+  memberId: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  joinedAt: string;
+  currentShareAmount?: number;
+  currentLoanAmount?: number;
+  currentLoanBalance?: number;
+  initialInterest?: number;
+}
+
+interface GroupData {
+  id: string;
+  groupId: string;
+  name: string;
+  address?: string;
+  leader: {
+    id: string;
+    name: string;
+    email: string;
+  };
+  memberCount: number;
+  dateOfStarting?: string;
+  description?: string;
+  cashInHand?: number;
+  balanceInBank?: number;
+  monthlyContribution?: number;
+  interestRate?: number;
+  collectionFrequency?: 'WEEKLY' | 'FORTNIGHTLY' | 'MONTHLY' | 'YEARLY';
+  collectionDayOfMonth?: number; // Day of month (1-31) for MONTHLY/YEARLY
+  collectionDayOfWeek?: 'MONDAY' | 'TUESDAY' | 'WEDNESDAY' | 'THURSDAY' | 'FRIDAY' | 'SATURDAY' | 'SUNDAY'; // Day of week for WEEKLY/FORTNIGHTLY
+  collectionWeekOfMonth?: number; // Week of month (1-4) for FORTNIGHTLY
+  // Late fine configuration via LateFineRule model
+  lateFineRules?: {
+    id: string;
+    ruleType: 'DAILY_FIXED' | 'DAILY_PERCENTAGE' | 'TIER_BASED';
+    isEnabled: boolean;
+    dailyAmount?: number;
+    dailyPercentage?: number;
+    tierRules?: {
+      startDay: number;
+      endDay: number;
+      amount: number;
+      isPercentage: boolean;
+    }[];
+  }[];
+  members: GroupMember[];
+  userPermissions: {
+    canEdit: boolean;
+    canViewMemberIds: boolean;
+  };
+}
+
+interface ContributionRecord {
+  id: string;
+  groupPeriodicRecordId: string;
+  memberId: string;
+  member?: {
+    id: string;
+    name: string;
+    email?: string;
+    phone?: string;
+  };
+  
+  // Required amounts
+  compulsoryContributionDue: number;
+  loanInterestDue?: number;
+  minimumDueAmount: number;
+  
+  // Actual payments
+  compulsoryContributionPaid: number;
+  loanInterestPaid: number;
+  lateFinePaid: number;
+  totalPaid: number;
+  
+  // Status and tracking
+  status: 'PENDING' | 'PARTIAL' | 'PAID' | 'LATE';
+  dueDate: string;
+  paidDate?: string;
+  daysLate: number;
+  lateFineAmount: number;
+  
+  // Remaining amounts
+  remainingAmount: number;
+  
+  // Cash allocation tracking
+  cashAllocation?: string; // JSON string containing allocation details
+  
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface MemberContributionStatus {
+  memberId: string;
+  memberName: string;
+  expectedContribution: number;
+  expectedInterest: number;
+  currentLoanBalance: number;
+  lateFineAmount: number;
+  daysLate: number;
+  dueDate: Date;
+  totalExpected: number;
+  paidAmount: number;
+  remainingAmount: number;
+  status: 'PENDING' | 'PAID' | 'PARTIAL' | 'OVERDUE';
+  lastPaymentDate?: string;
+}
+
+export default function ContributionTrackingPage() {
+  const params = useParams();
+  const groupId = params.id as string;
+  const { data: session } = useSession();
+  
+  const [group, setGroup] = useState<GroupData | null>(null);
+  const [memberContributions, setMemberContributions] = useState<MemberContributionStatus[]>([]);
+  const [actualContributions, setActualContributions] = useState<Record<string, ContributionRecord>>({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [showCompleted, setShowCompleted] = useState(false);
+  const [savingPayment, setSavingPayment] = useState<string | null>(null);
+  
+  // New state for period management
+  const [currentPeriod, setCurrentPeriod] = useState<{
+    id: string;
+    startDate: string;
+    endDate?: string;
+    isClosed: boolean;
+    periodNumber: number;
+    periodType: 'WEEKLY' | 'FORTNIGHTLY' | 'MONTHLY' | 'YEARLY';
+  } | null>(null);
+  const [showOldContributions, setShowOldContributions] = useState(false);
+  const [selectedPeriodId, setSelectedPeriodId] = useState<string>('');
+  const [oldPeriods, setOldPeriods] = useState<any[]>([]);
+  const [closingPeriod, setClosingPeriod] = useState(false);
+  
+  // Payment modal state
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [showClosePeriodModal, setShowClosePeriodModal] = useState(false);
+  const [selectedMember, setSelectedMember] = useState<{
+    id: string;
+    name: string;
+    expectedContribution: number;
+    expectedInterest: number;
+    remainingAmount: number;
+    lateFineAmount?: number;
+    daysLate?: number;
+  } | null>(null);
+  const [paymentAmount, setPaymentAmount] = useState('');
+  const [contributionAllocation, setContributionAllocation] = useState({
+    cashInHand: 0,
+    cashInBank: 0
+  });
+  const [interestAllocation, setInterestAllocation] = useState({
+    cashInHand: 0,
+    cashInBank: 0
+  });
+
+  useEffect(() => {
+    fetchGroupData();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupId]);
+
+  const fetchGroupData = useCallback(async () => {
+    try {
+      // Fetch group data
+      const groupResponse = await fetch(`/api/groups/${groupId}`);
+      if (!groupResponse.ok) throw new Error('Failed to fetch group details');
+      
+      const groupData: GroupData = await groupResponse.json();
+      setGroup(groupData);
+      
+      // Fetch current period information
+      try {
+        const periodResponse = await fetch(`/api/groups/${groupId}/contributions/periods/current`);
+        if (periodResponse.ok) {
+          const periodData = await periodResponse.json();
+          setCurrentPeriod(periodData.period);
+        }
+      } catch (_err) {
+        console.log('No current period found, will create one when needed');
+      }
+      
+      // Fetch old periods for viewing history
+      try {
+        const oldPeriodsResponse = await fetch(`/api/groups/${groupId}/contributions/periods`);
+        if (oldPeriodsResponse.ok) {
+          const periodsData = await oldPeriodsResponse.json();
+          setOldPeriods(periodsData.periods || []);
+        }
+      } catch (_err) {
+        console.log('No old periods found');
+      }
+      
+      // Fetch current contribution data
+      let contributionData: Record<string, ContributionRecord> = {};
+      try {
+        const contributionResponse = await fetch(`/api/groups/${groupId}/contributions/current`);
+        if (contributionResponse.ok) {
+          const contributionsResult = await contributionResponse.json();
+          // Convert contribution array to a map by member ID
+          contributionData = contributionsResult.contributions?.reduce((acc: Record<string, ContributionRecord>, contrib: ContributionRecord) => {
+            acc[contrib.memberId] = contrib;
+            return acc;
+          }, {}) || {};
+          setActualContributions(contributionData);
+        }
+      } catch (_err) {
+        console.log('No existing contribution records found, using group data only');
+        // This is fine - it means no contributions have been recorded yet for the current period
+      }
+
+      // Ensure all current group members have contribution records
+      if (groupData?.members) {
+        const missingMembers = groupData.members.filter(member => 
+          !contributionData[member.id] && !contributionData[member.memberId]
+        );
+
+        if (missingMembers.length > 0) {
+          console.log(`Found ${missingMembers.length} members without contribution records, creating them...`);
+          
+          for (const member of missingMembers) {
+            try {
+              const createResponse = await fetch(`/api/groups/${groupId}/contributions/current`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  memberId: member.id || member.memberId,
+                  compulsoryContributionDue: groupData.monthlyContribution || 0,
+                  loanInterestDue: 0
+                })
+              });
+
+              if (createResponse.ok) {
+                const newContribution = await createResponse.json();
+                contributionData[member.id || member.memberId] = newContribution;
+                console.log(`Created contribution record for member: ${member.name}`);
+              }
+            } catch (createError) {
+              console.warn(`Failed to create contribution record for member ${member.name}:`, createError);
+            }
+          }
+          
+          // Update the state with the new contribution data
+          setActualContributions(contributionData);
+        }
+      }
+      
+      // Calculate member contribution expectations based on group data and actual payments
+      const calculatedContributions = calculateMemberContributions(groupData, contributionData);
+      setMemberContributions(calculatedContributions);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'An error occurred');
+    } finally {
+      setLoading(false);
+    }
+  }, [groupId]);
+
+  // Calculate the next due date based on collection frequency
+  const calculateNextDueDate = (groupData: GroupData): Date => {
+    const today = new Date();
+    const frequency = groupData.collectionFrequency || 'MONTHLY';
+    
+    switch (frequency) {
+      case 'WEEKLY': {
+        const targetDay = getDayOfWeekNumber(groupData.collectionDayOfWeek || 'MONDAY');
+        const currentDay = today.getDay();
+        const daysUntilTarget = (targetDay - currentDay + 7) % 7;
+        const dueDate = new Date(today);
+        dueDate.setDate(today.getDate() + daysUntilTarget);
+        return dueDate;
+      }
+      
+      case 'FORTNIGHTLY': {
+        const targetDay = getDayOfWeekNumber(groupData.collectionDayOfWeek || 'MONDAY');
+        const weekOfMonth = groupData.collectionWeekOfMonth || 1;
+        const currentDay = today.getDay();
+        const daysUntilTarget = (targetDay - currentDay + 7) % 7;
+        const nextWeeklyDate = new Date(today);
+        nextWeeklyDate.setDate(today.getDate() + daysUntilTarget);
+        
+        // Adjust for fortnightly schedule
+        if (weekOfMonth === 1 || weekOfMonth === 3) {
+          // First or third week of month
+          const firstWeekDate = new Date(nextWeeklyDate.getFullYear(), nextWeeklyDate.getMonth(), 1);
+          firstWeekDate.setDate(1 + ((targetDay - firstWeekDate.getDay() + 7) % 7));
+          if (weekOfMonth === 3) {
+            firstWeekDate.setDate(firstWeekDate.getDate() + 14);
+          }
+          return firstWeekDate;
+        } else {
+          // Second or fourth week of month
+          const secondWeekDate = new Date(nextWeeklyDate.getFullYear(), nextWeeklyDate.getMonth(), 1);
+          secondWeekDate.setDate(1 + ((targetDay - secondWeekDate.getDay() + 7) % 7) + 7);
+          if (weekOfMonth === 4) {
+            secondWeekDate.setDate(secondWeekDate.getDate() + 14);
+          }
+          return secondWeekDate;
+        }
+      }
+      
+      case 'MONTHLY': {
+        const targetDay = groupData.collectionDayOfMonth || 1;
+        const currentMonth = today.getMonth();
+        const currentYear = today.getFullYear();
+        let dueDate = new Date(currentYear, currentMonth, targetDay);
+        
+        // If the target day has passed this month, move to next month
+        if (dueDate <= today) {
+          dueDate = new Date(currentYear, currentMonth + 1, targetDay);
+        }
+        
+        // Handle months with fewer days (e.g., February 30 -> February 28/29)
+        if (dueDate.getMonth() !== (currentMonth + 1) % 12) {
+          dueDate = new Date(currentYear, currentMonth + 1, 0); // Last day of the month
+        }
+        
+        return dueDate;
+      }
+      
+      case 'YEARLY': {
+        const targetDay = groupData.collectionDayOfMonth || 1;
+        const targetMonth = 0; // January by default, can be extended to support specific months
+        const currentYear = today.getFullYear();
+        let dueDate = new Date(currentYear, targetMonth, targetDay);
+        
+        // If the target date has passed this year, move to next year
+        if (dueDate <= today) {
+          dueDate = new Date(currentYear + 1, targetMonth, targetDay);
+        }
+        
+        return dueDate;
+      }
+      
+      default:
+        return today;
+    }
+  };
+
+  // Helper function to convert day name to number (0 = Sunday, 1 = Monday, etc.)
+  const getDayOfWeekNumber = (dayName: string): number => {
+    const days = {
+      'SUNDAY': 0,
+      'MONDAY': 1,
+      'TUESDAY': 2,
+      'WEDNESDAY': 3,
+      'THURSDAY': 4,
+      'FRIDAY': 5,
+      'SATURDAY': 6
+    };
+    return days[dayName as keyof typeof days] || 1;
+  };
+
+  // Helper function to get ordinal suffix (1st, 2nd, 3rd, etc.)
+  const getOrdinalSuffix = (day: number): string => {
+    if (day > 3 && day < 21) return 'th';
+    switch (day % 10) {
+      case 1: return 'st';
+      case 2: return 'nd';
+      case 3: return 'rd';
+      default: return 'th';
+    }
+  };
+
+  // Calculate late fine based on group's late fine rules
+  const calculateLateFine = (groupData: GroupData, daysLate: number, expectedContribution: number): number => {
+    const lateFineRule = groupData.lateFineRules?.[0];
+    
+    if (!lateFineRule || !lateFineRule.isEnabled || daysLate <= 0) {
+      return 0;
+    }
+
+    switch (lateFineRule.ruleType) {
+      case 'DAILY_FIXED':
+        return (lateFineRule.dailyAmount || 0) * daysLate;
+      
+      case 'DAILY_PERCENTAGE':
+        return expectedContribution * (lateFineRule.dailyPercentage || 0) / 100 * daysLate;
+      
+      case 'TIER_BASED':
+        let totalFine = 0;
+        const tierRules = lateFineRule.tierRules || [];
+        
+        for (const tier of tierRules) {
+          if (daysLate >= tier.startDay) {
+            const daysInTier = Math.min(daysLate, tier.endDay) - tier.startDay + 1;
+            if (tier.isPercentage) {
+              totalFine += expectedContribution * (tier.amount / 100) * daysInTier;
+            } else {
+              totalFine += tier.amount * daysInTier;
+            }
+          }
+        }
+        
+        return totalFine;
+      
+      default:
+        return 0;
+    }
+  };
+
+  const calculateMemberContributions = (groupData: GroupData, actualContributions: Record<string, any> = {}): MemberContributionStatus[] => {
+    const expectedContribution = groupData.monthlyContribution || 0;
+    const interestRate = (groupData.interestRate || 0) / 100;
+    const dueDate = calculateNextDueDate(groupData);
+    const today = new Date();
+    
+    return groupData.members.map(member => {
+      const currentLoanBalance = member.currentLoanBalance || 0;
+      const expectedInterest = currentLoanBalance * interestRate;
+      
+      // Calculate days late (0 if not overdue)
+      const daysLate = Math.max(0, Math.ceil((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24)));
+      
+      // Calculate late fine
+      const lateFineAmount = calculateLateFine(groupData, daysLate, expectedContribution);
+      
+      const totalExpected = expectedContribution + expectedInterest + lateFineAmount;
+      
+      // Use actual payment data from MemberContribution records if available
+      const actualContribution = actualContributions[member.id];
+      let paidAmount = 0;
+      let status: 'PENDING' | 'PAID' | 'PARTIAL' | 'OVERDUE' = 'PENDING';
+      let lastPaymentDate: string | undefined;
+
+      if (actualContribution) {
+        // Get data from actual MemberContribution record
+        paidAmount = actualContribution.totalPaid || 0;
+        lastPaymentDate = actualContribution.paidDate;
+        
+        // Determine status based on actual payment
+        if (paidAmount >= totalExpected) {
+          status = 'PAID';
+        } else if (paidAmount > 0) {
+          status = daysLate > 0 ? 'OVERDUE' : 'PARTIAL';
+        } else if (daysLate > 0) {
+          status = 'OVERDUE';
+        }
+      } else {
+        // No contribution record exists yet - all amounts are pending
+        paidAmount = 0;
+        status = daysLate > 0 ? 'OVERDUE' : 'PENDING';
+      }
+      
+      const remainingAmount = Math.max(0, totalExpected - paidAmount);
+      
+      return {
+        memberId: member.id,
+        memberName: member.name,
+        expectedContribution,
+        expectedInterest,
+        currentLoanBalance,
+        lateFineAmount,
+        daysLate,
+        dueDate,
+        totalExpected,
+        paidAmount,
+        remainingAmount,
+        status,
+        lastPaymentDate,
+      } as MemberContributionStatus;
+    });
+  };
+
+  const markContributionPaid = async (memberId: string, amount: number, cashAllocation?: {
+    contributionToCashInHand: number;
+    contributionToCashInBank: number;
+    interestToCashInHand: number;
+    interestToCashInBank: number;
+  }) => {
+    setSavingPayment(memberId);
+    try {
+      // Find the contribution record for this member
+      let memberContribution = actualContributions[memberId];
+      
+      // If no contribution record exists, create one
+      if (!memberContribution) {
+        try {
+          console.log(`No contribution record found for member ${memberId}, creating one...`);
+          
+          // Get member info for the creation
+          const member = group?.members.find(m => m.id === memberId || m.memberId === memberId);
+          if (!member) {
+            throw new Error('Member not found in group');
+          }
+
+          // Create a new contribution record via API
+          const createResponse = await fetch(`/api/groups/${params.id}/contributions/current`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              memberId: memberId,
+              compulsoryContributionDue: group?.monthlyContribution || 0,
+              loanInterestDue: 0 // Will be calculated by the API if needed
+            })
+          });
+
+          if (!createResponse.ok) {
+            throw new Error('Failed to create contribution record');
+          }
+
+          const newContribution = await createResponse.json();
+          
+          // Update local state with the new contribution
+          memberContribution = newContribution;
+          setActualContributions(prev => ({
+            ...prev,
+            [memberId]: newContribution
+          }));
+          
+          console.log('Successfully created contribution record for member:', memberId);
+        } catch (createError) {
+          console.error('Failed to create contribution record:', createError);
+          throw new Error(`Unable to process payment: ${createError instanceof Error ? createError.message : 'Failed to create contribution record'}`);
+        }
+      }
+
+      // Calculate how to allocate the payment
+      const memberContrib = memberContributions.find(c => c.memberId === memberId);
+      if (!memberContrib) {
+        throw new Error('Member contribution data not found');
+      }
+
+      // Get the actual contribution record
+      if (!memberContribution) {
+        throw new Error('Member contribution record not found');
+      }
+
+      // Allocate payment: first to compulsory contribution, then interest, then late fine
+      let remainingPayment = amount;
+      let compulsoryPaid = memberContribution.compulsoryContributionPaid || 0;
+      let interestPaid = memberContribution.loanInterestPaid || 0;
+      let lateFinesPaid = memberContribution.lateFinePaid || 0;
+
+      // Pay compulsory contribution first
+      if (remainingPayment > 0 && compulsoryPaid < memberContrib.expectedContribution) {
+        const needToPayCompulsory = memberContrib.expectedContribution - compulsoryPaid;
+        const payCompulsory = Math.min(remainingPayment, needToPayCompulsory);
+        compulsoryPaid += payCompulsory;
+        remainingPayment -= payCompulsory;
+      }
+
+      // Pay interest second
+      if (remainingPayment > 0 && interestPaid < memberContrib.expectedInterest) {
+        const needToPayInterest = memberContrib.expectedInterest - interestPaid;
+        const payInterest = Math.min(remainingPayment, needToPayInterest);
+        interestPaid += payInterest;
+        remainingPayment -= payInterest;
+      }
+
+      // Pay late fines last
+      if (remainingPayment > 0 && lateFinesPaid < memberContrib.lateFineAmount) {
+        const needToPayLateFines = memberContrib.lateFineAmount - lateFinesPaid;
+        const payLateFines = Math.min(remainingPayment, needToPayLateFines);
+        lateFinesPaid += payLateFines;
+        remainingPayment -= payLateFines;
+      }
+
+      // Update the contribution via API with cash allocation data
+      const response = await fetch(`/api/groups/${groupId}/contributions/${memberContribution.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          compulsoryContributionPaid: compulsoryPaid,
+          loanInterestPaid: interestPaid,
+          lateFinePaid: lateFinesPaid,
+          totalPaid: (memberContribution.totalPaid || 0) + amount,
+          cashAllocation: cashAllocation || {
+            contributionToCashInHand: amount,
+            contributionToCashInBank: 0,
+            interestToCashInHand: 0,
+            interestToCashInBank: 0
+          }
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to update payment');
+      }
+
+      const { contribution: updatedContribution } = await response.json();
+
+      // Update local state with the API response
+      setActualContributions(prev => ({
+        ...prev,
+        [memberId]: updatedContribution
+      }));
+
+      // Recalculate member contributions with updated payment data
+      if (group) {
+        const updatedPaymentData = {
+          ...actualContributions,
+          [memberId]: updatedContribution
+        };
+        const recalculatedContributions = calculateMemberContributions(group, updatedPaymentData);
+        setMemberContributions(recalculatedContributions);
+      }
+      
+    } catch (err) {
+      console.error('Error updating payment:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Failed to update payment';
+      
+      // Provide more user-friendly error messages
+      let userMessage = errorMessage;
+      if (errorMessage.includes('No contribution record found')) {
+        userMessage = 'Unable to process payment. The contribution record for this member could not be found or created. Please try refreshing the page or contact support.';
+      } else if (errorMessage.includes('Member not found')) {
+        userMessage = 'Member information could not be found. Please refresh the page and try again.';
+      } else if (errorMessage.includes('Failed to create contribution record')) {
+        userMessage = 'Unable to create contribution record. Please ensure you have proper permissions and try again.';
+      }
+      
+      alert(userMessage);
+    } finally {
+      setSavingPayment(null);
+    }
+  };
+
+  // Payment modal helper functions
+  const markContributionUnpaid = async (memberId: string) => {
+    if (!confirm('Are you sure you want to mark this contribution as unpaid? This will reset all payment records for this member.')) {
+      return;
+    }
+
+    setSavingPayment(memberId);
+    try {
+      // Find the contribution record for this member
+      const memberContribution = actualContributions[memberId];
+      if (!memberContribution) {
+        throw new Error('Member contribution record not found');
+      }
+
+      // Reset all payment amounts to 0
+      const response = await fetch(`/api/groups/${groupId}/contributions/${memberContribution.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          compulsoryContributionPaid: 0,
+          loanInterestPaid: 0,
+          lateFinePaid: 0,
+          totalPaid: 0,
+          status: 'PENDING',
+          cashAllocation: {
+            contributionToCashInHand: 0,
+            contributionToCashInBank: 0,
+            interestToCashInHand: 0,
+            interestToCashInBank: 0
+          }
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to mark as unpaid');
+      }
+
+      const { contribution: updatedContribution } = await response.json();
+
+      // Update local state with the API response
+      setActualContributions(prev => ({
+        ...prev,
+        [memberId]: updatedContribution
+      }));
+
+      // Recalculate member contributions with updated payment data
+      if (group) {
+        const updatedPaymentData = {
+          ...actualContributions,
+          [memberId]: updatedContribution
+        };
+        const recalculatedContributions = calculateMemberContributions(group, updatedPaymentData);
+        setMemberContributions(recalculatedContributions);
+      }
+      
+    } catch (err) {
+      console.error('Error marking contribution as unpaid:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Failed to mark as unpaid';
+      alert(`Error: ${errorMessage}`);
+    } finally {
+      setSavingPayment(null);
+    }
+  };
+
+  // Payment modal helper functions
+  const calculateAutoAllocation = () => {
+    if (!selectedMember) return;
+    
+    const paymentAmt = Number(paymentAmount) || 0;
+    if (paymentAmt <= 0) return;
+    
+    // Auto-allocate based on payment distribution
+    let remainingPayment = paymentAmt;
+    let contributionPayment = 0;
+    let interestPayment = 0;
+    
+    // First allocate to compulsory contribution
+    if (remainingPayment > 0 && selectedMember.expectedContribution > 0) {
+      contributionPayment = Math.min(remainingPayment, selectedMember.expectedContribution);
+      remainingPayment -= contributionPayment;
+    }
+    
+    // Then allocate to interest
+    if (remainingPayment > 0 && selectedMember.expectedInterest > 0) {
+      interestPayment = Math.min(remainingPayment, selectedMember.expectedInterest);
+      remainingPayment -= interestPayment;
+    }
+    
+    // Set the allocation amounts
+    setContributionAllocation({
+      cashInHand: contributionPayment * 0.3, // 30% to hand by default
+      cashInBank: contributionPayment * 0.7  // 70% to bank by default
+    });
+    
+    setInterestAllocation({
+      cashInHand: interestPayment * 0.3,
+      cashInBank: interestPayment * 0.7
+    });
+  };
+
+  const generateReport = async () => {
+    setShowReportModal(true);
+  };
+
+  // Function to generate CSV report
+  const generateCSVReport = () => {
+    if (!group) return;
+    
+    try {
+      // Calculate cash allocation totals
+      const totalCashInHand = Object.values(actualContributions).reduce((sum, record) => {
+        if (record.cashAllocation) {
+          try {
+            const allocation = JSON.parse(record.cashAllocation);
+            return sum + (allocation.contributionToCashInHand || 0) + (allocation.interestToCashInHand || 0);
+          } catch (e) {
+            return sum;
+          }
+        }
+        return sum;
+      }, 0);
+      
+      const totalCashInBank = Object.values(actualContributions).reduce((sum, record) => {
+        if (record.cashAllocation) {
+          try {
+            const allocation = JSON.parse(record.cashAllocation);
+            return sum + (allocation.contributionToCashInBank || 0) + (allocation.interestToCashInBank || 0);
+          } catch (e) {
+            return sum;
+          }
+        }
+        return sum;
+      }, 0);
+
+      // Create report data with cash allocation breakdown
+      const reportData = memberContributions.map(member => {
+        // Parse cash allocation if it exists
+        let cashInHand = 0;
+        let cashInBank = 0;
+        
+        const contributionRecord = actualContributions[member.memberId];
+        if (contributionRecord && contributionRecord.cashAllocation) {
+          try {
+            const allocation = JSON.parse(contributionRecord.cashAllocation);
+            cashInHand = (allocation.contributionToCashInHand || 0) + (allocation.interestToCashInHand || 0);
+            cashInBank = (allocation.contributionToCashInBank || 0) + (allocation.interestToCashInBank || 0);
+          } catch (e) {
+            console.error('Error parsing cash allocation:', e);
+          }
+        }
+        
+        return {
+          'Member Name': member.memberName,
+          'Expected Contribution': member.expectedContribution,
+          'Expected Interest': member.expectedInterest,
+          'Total Expected': member.totalExpected,
+          'Amount Paid': member.paidAmount,
+          'Cash in Hand': cashInHand,
+          'Cash in Bank': cashInBank,
+          'Current Loan Amount': member.currentLoanBalance || 0,
+          'Remaining Amount': member.remainingAmount,
+          'Status': member.status,
+          'Payment Date': (contributionRecord?.paidDate) ? 
+            new Date(contributionRecord.paidDate).toLocaleDateString() : 'Not Paid'
+        };
+      });
+
+      // Calculate totals for summary
+      const totalLoanAmounts = memberContributions.reduce((sum, c) => sum + (c.currentLoanBalance || 0), 0);
+
+      // Add summary row with cash allocation totals
+      const summaryRow = {
+        'Member Name': 'TOTAL SUMMARY',
+        'Expected Contribution': memberContributions.reduce((sum, c) => sum + c.expectedContribution, 0),
+        'Expected Interest': memberContributions.reduce((sum, c) => sum + c.expectedInterest, 0),
+        'Total Expected': memberContributions.reduce((sum, c) => sum + c.totalExpected, 0),
+        'Amount Paid': memberContributions.reduce((sum, c) => sum + c.paidAmount, 0),
+        'Cash in Hand': totalCashInHand,
+        'Cash in Bank': totalCashInBank,
+        'Current Loan Amount': totalLoanAmounts,
+        'Remaining Amount': memberContributions.reduce((sum, c) => sum + c.remainingAmount, 0),
+        'Status': `${memberContributions.filter(c => c.status === 'PAID').length}/${memberContributions.length} Completed`,
+        'Payment Date': ''
+      };
+
+      // Calculate collection statistics for report footer
+      const totalExpected = memberContributions.reduce((sum, c) => sum + c.totalExpected, 0);
+      const totalCollected = memberContributions.reduce((sum, c) => sum + c.paidAmount, 0);
+      const collectionRate = totalExpected > 0 ? (totalCollected / totalExpected) * 100 : 0;
+      const groupStanding = totalCollected + (group.cashInHand || 0) + (group.balanceInBank || 0) + totalLoanAmounts;
+      const sharePerMember = group.memberCount > 0 ? groupStanding / group.memberCount : 0;
+
+      // Create enhanced CSV content with better headers and summary section
+      const csvContent = [
+        // Title
+        ['CONTRIBUTION REPORT'],
+        [''], // Empty row
+        // Header info
+        [`Group:,${group.name},,Monthly Contribution:,₹${group.monthlyContribution?.toLocaleString()}`],
+        [`Report Date:,${new Date().toLocaleDateString()},,Interest Rate:,${group.interestRate || 0}%`],
+        [`Collection Frequency:,${group.collectionFrequency || 'Monthly'}`],
+        [''], // Empty row for spacing
+        // Column headers
+        Object.keys(reportData[0] || {}),
+        // Data rows
+        ...reportData.map(row => Object.values(row)),
+        [''], // Empty row before summary
+        Object.values(summaryRow),
+        [''], // Empty row after summary
+        ['COLLECTION STATISTICS & SUMMARY'],
+        [''], // Empty row
+        ['Collection Statistics:,,Cash Allocation:,,Group Standing:'],
+        [`Total Expected:,₹${totalExpected.toLocaleString()},Cash in Hand:,₹${totalCashInHand.toLocaleString()},Group Standing:,₹${groupStanding.toLocaleString()}`],
+        [`Total Collected:,₹${totalCollected.toLocaleString()},Cash in Bank:,₹${totalCashInBank.toLocaleString()},Total Revenue:,₹${totalCollected.toLocaleString()}`],
+        [`Collection Rate:,${collectionRate.toFixed(1)}%,Total Loan Amounts:,₹${totalLoanAmounts.toLocaleString()},Share per Member:,₹${sharePerMember.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`],
+        [`Members Completed:,${memberContributions.filter(c => c.status === 'PAID').length}/${memberContributions.length},,,,`],
+        [''], // Empty row
+        [`Generated on ${new Date().toLocaleString()}`]
+      ].map(row => {
+        // Make sure all elements in the row are strings to avoid CSV parsing issues
+        return row.map(cell => {
+          if (cell === null || cell === undefined) return '';
+          if (typeof cell === 'string') return `"${cell.replace(/"/g, '""')}"`;
+          return cell;
+        }).join(',');
+      }).join('\n');
+
+      // Download CSV with better filename
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `${group.name}_Contributions_${new Date().toISOString().split('T')[0]}.csv`;
+      link.click();
+      
+      setShowReportModal(false);
+    } catch (err) {
+      console.error('CSV generation error:', err);
+      alert(err instanceof Error ? err.message : 'An error occurred generating CSV');
+    }
+  };
+
+  // Function to generate Excel report
+  const generateExcelReport = async () => {
+    if (!group) return;
+    
+    try {
+      const { default: ExcelJS } = await import('exceljs');
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('Contributions Report');
+
+      // Title row with colored header
+      const titleRow = worksheet.addRow(['CONTRIBUTION REPORT']);
+      titleRow.height = 30;
+      titleRow.font = { bold: true, size: 16, color: { argb: 'FFFFFFFF' } };
+      worksheet.mergeCells('A1:K1');
+      titleRow.alignment = { horizontal: 'center', vertical: 'middle' };
+      worksheet.getCell('A1').fill = { 
+        type: 'pattern', 
+        pattern: 'solid', 
+        fgColor: { argb: '4831D4' } // Primary color (72, 49, 212)
+      };
+
+      // Group info section with light gray background
+      worksheet.addRow([]);
+      
+      // Add group info with better formatting
+      const infoSection = [
+        ['Group Name:', group.name, '', 'Monthly Contribution:', `₹${group.monthlyContribution?.toLocaleString()}`],
+        ['Report Date:', new Date().toLocaleDateString(), '', 'Interest Rate:', `${group.interestRate || 0}%`],
+        ['Collection Frequency:', group.collectionFrequency || 'Monthly', '', '', '']
+      ];
+      
+      // Add group info rows with formatting
+      let rowNum = 3;
+      infoSection.forEach(rowData => {
+        const row = worksheet.addRow(rowData);
+        rowNum++;
+        
+        // Format label cells (columns A, D)
+        [1, 4].forEach(col => {
+          if (rowData[col-1]) {
+            const cell = row.getCell(col);
+            cell.font = { bold: true };
+          }
+        });
+      });
+      
+      // Style the info section
+      worksheet.mergeCells(`A3:E${rowNum}`);
+      for (let i = 3; i <= rowNum; i++) {
+        for (let j = 1; j <= 5; j++) {
+          const cell = worksheet.getCell(i, j);
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF5F7FA' } }; // Light gray
+        }
+      }
+      
+      worksheet.addRow([]); // Empty row before table
+      rowNum++;
+      
+      // Headers with better formatting and current loan amount
+      const headers = [
+        'Member Name', 'Expected Contribution', 'Expected Interest', 
+        'Total Expected', 'Amount Paid', 'Cash in Hand', 'Cash in Bank',
+        'Current Loan Amount', 'Remaining Amount', 'Status', 'Payment Date'
+      ];
+      const headerRow = worksheet.addRow(headers);
+      rowNum++;
+      
+      // Style headers with primary color
+      headerRow.height = 24;
+      headerRow.eachCell((cell) => {
+        cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '4831D4' } }; // Primary color
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      });
+
+      // Data rows with cash allocation breakdown and loan amounts
+      let rowCount = 0;
+      memberContributions.forEach(member => {
+        // Parse cash allocation if it exists
+        let cashInHand = 0;
+        let cashInBank = 0;
+        
+        const contributionRecord = actualContributions[member.memberId];
+        if (contributionRecord && contributionRecord.cashAllocation) {
+          try {
+            const allocation = JSON.parse(contributionRecord.cashAllocation);
+            cashInHand = (allocation.contributionToCashInHand || 0) + (allocation.interestToCashInHand || 0);
+            cashInBank = (allocation.contributionToCashInBank || 0) + (allocation.interestToCashInBank || 0);
+          } catch (e) {
+            console.error('Error parsing cash allocation:', e);
+          }
+        }
+        
+        const row = worksheet.addRow([
+          member.memberName,
+          member.expectedContribution,
+          member.expectedInterest,
+          member.totalExpected,
+          member.paidAmount,
+          cashInHand,
+          cashInBank,
+          member.currentLoanBalance || 0,
+          member.remainingAmount,
+          member.status,
+          contributionRecord?.paidDate ? 
+            new Date(contributionRecord.paidDate).toLocaleDateString() : 'Not Paid'
+        ]);
+        rowNum++;
+        rowCount++;
+        
+        // Apply alternate row styling
+        if (rowCount % 2 === 0) {
+          row.eachCell((cell) => {
+            cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFAFAFA' } }; // Light gray for alternating rows
+          });
+        }
+        
+        // Apply special formatting to status column (column J)
+        const statusCell = row.getCell(10);
+        if (member.status === 'PAID') {
+          statusCell.font = { color: { argb: '2E7D32' } }; // Green color for PAID
+        } else if (member.status === 'PARTIAL') {
+          statusCell.font = { color: { argb: 'C68200' } }; // Orange color for PARTIAL
+        } else if (member.status === 'OVERDUE') {
+          statusCell.font = { color: { argb: 'C62828' } }; // Red color for OVERDUE
+        }
+      });
+
+      // Calculate cash allocation totals for Excel
+      const totalCashInHand = Object.values(actualContributions).reduce((sum, record) => {
+        if (record.cashAllocation) {
+          try {
+            const allocation = JSON.parse(record.cashAllocation);
+            return sum + (allocation.contributionToCashInHand || 0) + (allocation.interestToCashInHand || 0);
+          } catch (e) {
+            return sum;
+          }
+        }
+        return sum;
+      }, 0);
+      
+      const totalCashInBank = Object.values(actualContributions).reduce((sum, record) => {
+        if (record.cashAllocation) {
+          try {
+            const allocation = JSON.parse(record.cashAllocation);
+            return sum + (allocation.contributionToCashInBank || 0) + (allocation.interestToCashInBank || 0);
+          } catch (e) {
+            return sum;
+          }
+        }
+        return sum;
+      }, 0);
+
+      // Calculate totals including loan amounts
+      const totalLoanAmounts = memberContributions.reduce((sum, c) => sum + (c.currentLoanBalance || 0), 0);
+      const totalExpected = memberContributions.reduce((sum, c) => sum + (c.totalExpected || 0), 0);
+      const totalCollected = memberContributions.reduce((sum, c) => sum + (c.paidAmount || 0), 0);
+      
+      // Calculate group standing
+      const groupStanding = totalCollected + (group.cashInHand || 0) + (group.balanceInBank || 0) + totalLoanAmounts;
+      const sharePerMember = group.memberCount > 0 ? groupStanding / group.memberCount : 0;
+
+      // Summary row with totals including loan amounts
+      worksheet.addRow([]); // Empty row before summary
+      rowNum++;
+      
+      const summaryRow = worksheet.addRow([
+        'TOTAL SUMMARY',
+        memberContributions.reduce((sum, c) => sum + (c.expectedContribution || 0), 0),
+        memberContributions.reduce((sum, c) => sum + (c.expectedInterest || 0), 0),
+        totalExpected,
+        totalCollected,
+        totalCashInHand,
+        totalCashInBank,
+        totalLoanAmounts,
+        memberContributions.reduce((sum, c) => sum + (c.remainingAmount || 0), 0),
+        `${memberContributions.filter(c => c.status === 'PAID').length}/${memberContributions.length} Completed`,
+        ''
+      ]);
+      rowNum++;
+      
+      // Style summary row with gold background
+      summaryRow.height = 24;
+      summaryRow.eachCell((cell) => {
+        cell.font = { bold: true };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFD700' } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      });
+      
+      // Add collection statistics section
+      worksheet.addRow([]);
+      rowNum++;
+      
+      const statsHeaderRow = worksheet.addRow(['Financial Summary & Group Standing']);
+      statsHeaderRow.font = { bold: true, size: 12, color: { argb: '4831D4' } };
+      worksheet.mergeCells(`A${rowNum}:E${rowNum}`);
+      rowNum++;
+      
+      // Background for statistics section
+      for (let i = rowNum; i <= rowNum + 8; i++) {
+        for (let j = 1; j <= 11; j++) {
+          const cell = worksheet.getCell(i, j);
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF5F7FA' } }; // Light gray
+        }
+      }
+      
+      // Collection statistics
+      const collectionRate = totalExpected > 0 ? (totalCollected / totalExpected) * 100 : 0;
+      
+      // Left column - Collection statistics
+      const collectStatRow = worksheet.addRow(['Collection Statistics:', '', '', '', 'Cash Allocation:']);
+      collectStatRow.font = { bold: true };
+      rowNum++;
+      
+      worksheet.addRow(['• Total Expected:', `₹${totalExpected.toLocaleString()}`, '', '', '• Cash in Hand:', `₹${totalCashInHand.toLocaleString()}`]);
+      rowNum++;
+      
+      worksheet.addRow(['• Total Collected:', `₹${totalCollected.toLocaleString()}`, '', '', '• Cash in Bank:', `₹${totalCashInBank.toLocaleString()}`]);
+      rowNum++;
+      
+      worksheet.addRow([
+        '• Collection Rate:', 
+        `${collectionRate.toFixed(1)}%`, 
+        '', 
+        '', 
+        '• Total Loan Amounts:', 
+        `₹${totalLoanAmounts.toLocaleString()}`
+      ]);
+      rowNum++;
+      
+      worksheet.addRow([
+        '• Members Completed:', 
+        `${memberContributions.filter(c => c.status === 'PAID').length}/${memberContributions.length}`,
+        '',
+        '',
+        '',
+        ''
+      ]);
+      rowNum++;
+      
+      // Group Standing section
+      worksheet.addRow(['Group Standing & Financial Overview:', '', '', '', 'Share per Member (₹):']);
+      const groupStandingRow = worksheet.getRow(rowNum);
+      groupStandingRow.font = { bold: true };
+      rowNum++;
+      
+      worksheet.addRow(['• Group Standing:', `₹${groupStanding.toLocaleString()}`, '', '', '• Per Member Share:', `₹${sharePerMember.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`]);
+      rowNum++;
+      
+      worksheet.addRow(['• Total Revenue This Period:', `₹${totalCollected.toLocaleString()}`, '', '', '• Calculation:', `₹${groupStanding.toLocaleString()} ÷ ${group.memberCount} members`]);
+      rowNum++;
+      
+      // Add footer with generation info
+      worksheet.addRow([]);
+      rowNum++;
+      
+      const footerRow = worksheet.addRow([`Generated on ${new Date().toLocaleString()}`]);
+      footerRow.font = { size: 8, color: { argb: '646464' } };
+      worksheet.mergeCells(`A${rowNum}:K${rowNum}`);
+      footerRow.alignment = { horizontal: 'center' };
+      
+      // Set column widths for better readability
+      worksheet.columns.forEach((column, i) => {
+        let width = 12;
+        
+        // Adjust specific columns
+        if (i === 0) width = 25; // Member Name
+        else if ([5, 6].includes(i)) width = 14; // Cash columns
+        else if (i === 7) width = 16; // Loan Amount
+        else if (i === 8) width = 15; // Remaining Amount
+        else if (i === 10) width = 16; // Payment Date
+        
+        column.width = width;
+      });
+
+      // Generate buffer and download
+      const buffer = await workbook.xlsx.writeBuffer();
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `${group.name}_Contributions_${new Date().toISOString().split('T')[0]}.xlsx`;
+      link.click();
+      
+      setShowReportModal(false);
+    } catch (err) {
+      console.error('Excel generation error:', err);
+      alert(err instanceof Error ? err.message : 'An error occurred generating Excel');
+    }
+  };
+
+  // Function to generate PDF report
+  const generatePDFReport = async () => {
+    if (!group) return;
+    
+    // Helper function to safely format currency - robust approach
+    const formatCurrency = (amount: number | undefined | null): string => {
+      const numValue = Number(amount);
+      if (isNaN(numValue)) return '0';
+      if (numValue === 0) return '0';
+      
+      // Use simple formatting that PDF can definitely handle
+      const formatted = Math.round(numValue).toString();
+      // Add commas for readability
+      return formatted.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    };
+    
+    try {
+      const { jsPDF } = await import('jspdf');
+      // Import autoTable to create better formatted tables
+      const { default: autoTable } = await import('jspdf-autotable');
+      const doc = new jsPDF();
+
+      // Debug: Check if we have data
+      console.log('Member contributions:', memberContributions);
+      console.log('Sample member:', memberContributions[0]);
+      
+      if (memberContributions.length === 0) {
+        alert('No member contribution data available for PDF generation');
+        return;
+      }
+
+      // Add a colored header background
+      doc.setFillColor(72, 49, 212); // Primary color (adjust as needed)
+      doc.rect(0, 0, doc.internal.pageSize.getWidth(), 30, 'F');
+      
+      // Title with white text
+      doc.setFontSize(22);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(255, 255, 255); // White text
+      doc.text('Contribution Report', 20, 20);
+      
+      // Group info - with better formatting
+      doc.setFillColor(245, 247, 250); // Light gray background
+      doc.rect(10, 35, doc.internal.pageSize.getWidth() - 20, 40, 'F');
+      
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(0, 0, 0); // Black text
+      
+      doc.setFont('helvetica', 'bold');
+      doc.text('Group:', 20, 45);
+      doc.setFont('helvetica', 'normal');
+      doc.text(group.name, 65, 45);
+      
+      doc.setFont('helvetica', 'bold');
+      doc.text('Report Date:', 20, 55);
+      doc.setFont('helvetica', 'normal');
+      doc.text(new Date().toLocaleDateString(), 65, 55);
+      
+      doc.setFont('helvetica', 'bold');
+      doc.text('Collection Frequency:', 20, 65);
+      doc.setFont('helvetica', 'normal');
+      doc.text(group.collectionFrequency || 'Monthly', 65, 65);
+      
+      doc.setFont('helvetica', 'bold');
+      doc.text('Monthly Contribution:', 120, 45);
+      doc.setFont('helvetica', 'normal');
+      doc.text(formatCurrency(group.monthlyContribution), 170, 45);
+      
+      doc.setFont('helvetica', 'bold');
+      doc.text('Interest Rate:', 120, 55);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`${Number(group.interestRate) || 0}%`, 170, 55);
+
+      // Calculate totals for group standing
+      const totalExpected = memberContributions.reduce((sum, c) => sum + (c.totalExpected || 0), 0);
+      const totalCollected = memberContributions.reduce((sum, c) => sum + (c.paidAmount || 0), 0);
+      const totalLoanAmounts = memberContributions.reduce((sum, c) => sum + (c.currentLoanBalance || 0), 0);
+      const groupStanding = totalCollected + (group.cashInHand || 0) + (group.balanceInBank || 0) + totalLoanAmounts;
+      const sharePerMember = group.memberCount > 0 ? groupStanding / group.memberCount : 0;
+
+      // Prepare data for the table with cash allocation and loan amounts
+      const tableData = memberContributions.map(member => {
+        // Parse cash allocation if it exists
+        let cashInHand = 0;
+        let cashInBank = 0;
+        
+        const contributionRecord = actualContributions[member.memberId];
+        if (contributionRecord && contributionRecord.cashAllocation) {
+          try {
+            const allocation = JSON.parse(contributionRecord.cashAllocation);
+            cashInHand = Number((allocation.contributionToCashInHand || 0) + (allocation.interestToCashInHand || 0)) || 0;
+            cashInBank = Number((allocation.contributionToCashInBank || 0) + (allocation.interestToCashInBank || 0)) || 0;
+          } catch (e) {
+            console.error('Error parsing cash allocation:', e);
+          }
+        }
+        
+        return [
+          member.memberName || '',
+          formatCurrency(member.expectedContribution),
+          formatCurrency(member.expectedInterest),
+          formatCurrency(member.totalExpected),
+          formatCurrency(member.paidAmount),
+          formatCurrency(cashInHand),
+          formatCurrency(cashInBank),
+          formatCurrency(member.currentLoanBalance),
+          formatCurrency(member.remainingAmount),
+          member.status || 'PENDING'
+        ];
+      });
+
+      // Debug: Log table data after creation
+      console.log('Table data sample:', tableData.slice(0, 2));
+      console.log('Sample formatted values:', {
+        raw: memberContributions[0]?.expectedContribution,
+        formatted: formatCurrency(memberContributions[0]?.expectedContribution)
+      });
+      
+      // Calculate cash allocation totals
+      const totalCashInHand = Object.values(actualContributions).reduce((sum, record) => {
+        if (record.cashAllocation) {
+          try {
+            const allocation = JSON.parse(record.cashAllocation);
+            return sum + (allocation.contributionToCashInHand || 0) + (allocation.interestToCashInHand || 0);
+          } catch (e) {
+            return sum;
+          }
+        }
+        return sum;
+      }, 0);
+      
+      const totalCashInBank = Object.values(actualContributions).reduce((sum, record) => {
+        if (record.cashAllocation) {
+          try {
+            const allocation = JSON.parse(record.cashAllocation);
+            return sum + (allocation.contributionToCashInBank || 0) + (allocation.interestToCashInBank || 0);
+          } catch (e) {
+            return sum;
+          }
+        }
+        return sum;
+      }, 0);
+
+      // Use autoTable for better formatting
+      autoTable(doc, {
+        startY: 85,
+        head: [['Member Name', 'Expected', 'Interest', 'Total', 'Paid', 'Cash Hand', 'Cash Bank', 'Loan Amt', 'Remaining', 'Status']],
+        body: tableData,
+        foot: [
+          [
+            'TOTALS', 
+            formatCurrency(memberContributions.reduce((sum, c) => sum + (c.expectedContribution || 0), 0)),
+            formatCurrency(memberContributions.reduce((sum, c) => sum + (c.expectedInterest || 0), 0)),
+            formatCurrency(totalExpected),
+            formatCurrency(totalCollected),
+            formatCurrency(totalCashInHand),
+            formatCurrency(totalCashInBank),
+            formatCurrency(totalLoanAmounts),
+            formatCurrency(memberContributions.reduce((sum, c) => sum + (c.remainingAmount || 0), 0)),
+            `${memberContributions.filter(c => c.status === 'PAID').length}/${memberContributions.length}`
+          ]
+        ],
+        headStyles: {
+          fillColor: [72, 49, 212],
+          textColor: [255, 255, 255],
+          fontStyle: 'bold'
+        },
+        footStyles: {
+          fillColor: [245, 247, 250],
+          textColor: [0, 0, 0],
+          fontStyle: 'bold'
+        },
+        alternateRowStyles: {
+          fillColor: [250, 250, 250]
+        },
+        columnStyles: {
+          0: { cellWidth: 25 }, // Name
+          1: { cellWidth: 18 }, // Expected
+          2: { cellWidth: 18 }, // Interest
+          3: { cellWidth: 18 }, // Total
+          4: { cellWidth: 18 }, // Paid
+          5: { cellWidth: 16 }, // Cash Hand
+          6: { cellWidth: 16 }, // Cash Bank
+          7: { cellWidth: 18 }, // Loan Amount
+          8: { cellWidth: 18 }, // Remaining
+          9: { cellWidth: 15 }  // Status
+        },
+        styles: {
+          fontSize: 8,
+          cellPadding: 1.5,
+          overflow: 'linebreak'
+        },
+        didParseCell: function(data) {
+          // Format the status column with colors
+          if (data.section === 'body' && data.column.index === 9) {
+            const status = data.cell.raw;
+            if (status === 'PAID') {
+              data.cell.styles.textColor = [46, 125, 50]; // Green color for PAID
+            } else if (status === 'PARTIAL') {
+              data.cell.styles.textColor = [198, 130, 0]; // Orange color for PARTIAL
+            } else if (status === 'OVERDUE') {
+              data.cell.styles.textColor = [198, 40, 40]; // Red color for OVERDUE
+            }
+          }
+          
+          // Debug: Log cell content for monetary columns
+          if (data.section === 'body' && data.column.index >= 1 && data.column.index <= 8) {
+            console.log(`Cell [${data.row.index}, ${data.column.index}]:`, data.cell.raw);
+          }
+        }
+      });
+
+      // Add comprehensive summary section
+      const finalY = (doc as any).lastAutoTable.finalY || 200;
+      let summaryY = finalY + 20;
+      
+      if (summaryY > 230) {
+        doc.addPage();
+        summaryY = 20;
+      }
+      
+      doc.setFillColor(245, 247, 250);
+      doc.rect(10, summaryY, doc.internal.pageSize.getWidth() - 20, 110, 'F');
+      
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(14);
+      doc.setTextColor(72, 49, 212);
+      doc.text('Financial Summary & Group Standing', 20, summaryY + 12);
+      
+      doc.setFontSize(10);
+      doc.setTextColor(0, 0, 0);
+      
+      // Left column - Collection statistics
+      doc.setFont('helvetica', 'bold');
+      doc.text('Collection Statistics:', 20, summaryY + 27);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`• Total Expected: ${formatCurrency(totalExpected)}`, 25, summaryY + 37);
+      doc.text(`• Total Collected: ${formatCurrency(totalCollected)}`, 25, summaryY + 47);
+      
+      const collectionRate = totalExpected > 0 ? (totalCollected / totalExpected) * 100 : 0;
+      doc.text(`• Collection Rate: ${collectionRate.toFixed(1)}%`, 25, summaryY + 57);
+      doc.text(`• Members Completed: ${memberContributions.filter(c => c.status === 'PAID').length}/${memberContributions.length}`, 25, summaryY + 67);
+      
+      // Right column - Cash allocation
+      doc.setFont('helvetica', 'bold');
+      doc.text('Cash Allocation:', 110, summaryY + 27);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`• Cash in Hand: ${formatCurrency(totalCashInHand)}`, 115, summaryY + 37);
+      doc.text(`• Cash in Bank: ${formatCurrency(totalCashInBank)}`, 115, summaryY + 47);
+      doc.text(`• Total Loan Amounts: ${formatCurrency(totalLoanAmounts)}`, 115, summaryY + 57);
+      
+      // Group Standing section
+      doc.setFont('helvetica', 'bold');
+      doc.text('Group Standing & Financial Overview:', 20, summaryY + 77);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`• Group Standing: ${formatCurrency(groupStanding)}`, 25, summaryY + 87);
+      doc.text(`• Total Revenue This Period: ${formatCurrency(totalCollected)}`, 25, summaryY + 97);
+      
+      doc.setFont('helvetica', 'bold');
+      doc.text('Share per Member (₹):', 110, summaryY + 77);
+      doc.setFont('helvetica', 'normal');
+      doc.text(`${formatCurrency(sharePerMember)} per member`, 115, summaryY + 87);
+      doc.text(`(Total Group Standing ÷ ${group.memberCount} members)`, 115, summaryY + 97);
+      
+      // Footer with date and page numbers
+      const pageCount = doc.getNumberOfPages();
+      for (let i = 1; i <= pageCount; i++) {
+        doc.setPage(i);
+        doc.setFontSize(8);
+        doc.setTextColor(100, 100, 100);
+        doc.text(`Generated on ${new Date().toLocaleString()} | Page ${i} of ${pageCount}`, 
+          doc.internal.pageSize.getWidth() / 2, 
+          doc.internal.pageSize.getHeight() - 10, 
+          { align: 'center' }
+        );
+      }
+
+      // Download PDF
+      doc.save(`${group.name}_Contributions_${new Date().toISOString().split('T')[0]}.pdf`);
+      setShowReportModal(false);
+    } catch (err) {
+      console.error('PDF generation error:', err);
+      alert(err instanceof Error ? err.message : 'An error occurred generating PDF');
+    }
+  };
+
+  // Period management functions
+  const handleClosePeriod = async () => {
+    setShowClosePeriodModal(false);
+    await closePeriod();
+  };
+
+  const closePeriod = async () => {
+    if (!group || !currentPeriod) return;
+    
+    // Show debug info for troubleshooting
+    console.log("Closing period as:", {
+      sessionUserId: session?.user?.id,
+      groupLeaderId: group.leader?.id,
+      isMatching: session?.user?.id === group.leader?.id,
+      groupLeaderName: group.leader?.name,
+      sessionUserName: session?.user?.name
+    });
+    
+    setClosingPeriod(true);
+    try {
+      const requestData = {
+        periodId: currentPeriod.id,
+        memberContributions: memberContributions,
+        actualContributions: actualContributions
+      };
+      
+      console.log('Closing period with data:', requestData);
+      console.log('Current period:', currentPeriod);
+      console.log('Member contributions:', memberContributions);
+      console.log('Actual contributions:', actualContributions);
+      
+      const response = await fetch(`/api/groups/${groupId}/contributions/periods/close`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestData)
+      });
+
+      if (!response.ok) {
+        const errorData = await response.text();
+        console.error('Close period API error:', response.status, errorData);
+        throw new Error(`Failed to close period: ${response.status} - ${errorData}`);
+      }
+
+      const result = await response.json();
+      console.log('Close period success:', result);
+      
+      // Clear current state to force a fresh fetch
+      setCurrentPeriod(null);
+      setActualContributions({});
+      setMemberContributions([]);
+      
+      // Refresh data to get new period
+      await fetchGroupData();
+      
+      alert(`Period closed successfully! Created new period record with ID: ${result.newPeriod?.id}`);
+    } catch (err) {
+      console.error('Error closing period:', err);
+      alert('Failed to close period. Please try again.');
+    } finally {
+      setClosingPeriod(false);
+    }
+  };
+
+  const viewOldContributions = async (periodId: string) => {
+    try {
+      const response = await fetch(`/api/groups/${groupId}/contributions/periods/${periodId}`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch period data');
+      }
+
+      const periodData = await response.json();
+      
+      // Set the contributions data for the selected period
+      setActualContributions(periodData.contributions || {});
+      setSelectedPeriodId(periodId);
+      setShowOldContributions(true);
+      
+      // Calculate member contributions for this period
+      if (group) {
+        const calculatedContributions = calculateMemberContributions(group, periodData.contributions || {});
+        setMemberContributions(calculatedContributions);
+      }
+    } catch (err) {
+      console.error('Error fetching old contributions:', err);
+      alert('Failed to load period data. Please try again.');
+    }
+  };
+
+  const returnToCurrentPeriod = () => {
+    setShowOldContributions(false);
+    setSelectedPeriodId('');
+    fetchGroupData(); // Refresh current data
+  };
+
+  const formatPeriodName = (period: any) => {
+    if (!period) return 'Unknown Period';
+    
+    const dateStr = period.meetingDate || period.startDate;
+    if (!dateStr) return 'Unknown Period';
+    
+    const startDate = new Date(dateStr);
+    if (isNaN(startDate.getTime())) return 'Invalid Date';
+    
+    const frequency = group?.collectionFrequency || 'MONTHLY';
+    
+    switch (frequency) {
+      case 'WEEKLY':
+        return `Week of ${startDate.toLocaleDateString()}`;
+      case 'FORTNIGHTLY':
+        return `Fortnight of ${startDate.toLocaleDateString()}`;
+      case 'MONTHLY':
+        return `${startDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`;
+      case 'YEARLY':
+        return `Year ${startDate.getFullYear()}`;
+      default:
+        return startDate.toLocaleDateString();
+    }
+  };
+
+  const getCurrentPeriodName = () => {
+    if (!group) return '';
+    const today = new Date();
+    const frequency = group.collectionFrequency || 'MONTHLY';
+    
+    switch (frequency) {
+      case 'WEEKLY':
+        return `Current Week (${today.toLocaleDateString()})`;
+      case 'FORTNIGHTLY':
+        return `Current Fortnight (${today.toLocaleDateString()})`;
+      case 'MONTHLY':
+        return `Current Month (${today.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })})`;
+      case 'YEARLY':
+        return `Current Year (${today.getFullYear()})`;
+      default:
+        return `Current Period (${today.toLocaleDateString()})`;
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="max-w-7xl mx-auto py-12 px-4 sm:px-6 lg:px-8 text-center">
+        <div className="flex justify-center items-center mb-4">
+          <svg className="animate-spin h-10 w-10 text-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+        </div>
+        <p className="text-muted text-xl">Loading contribution tracking...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="max-w-7xl mx-auto py-12 px-4 sm:px-6 lg:px-8">
+        <div className="bg-red-50 dark:bg-red-900/20 p-8 rounded-lg border border-red-200 dark:border-red-700/50 text-center shadow-xl">
+          <div className="flex justify-center items-center mb-4">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-red-500 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+          </div>
+          <p className="text-red-700 dark:text-red-300 font-semibold text-2xl">Failed to load contribution data</p>
+          <p className="text-red-600 dark:text-red-400 mt-2 text-base">{error}</p>
+          <button
+            onClick={() => window.location.reload()}
+            className="btn-secondary mt-6 text-sm bg-red-100 dark:bg-red-700/50 dark:hover:bg-red-600/50 dark:text-red-300 dark:border-red-500/50"
+          >
+            Try Again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!group) {
+    return (
+      <div className="max-w-7xl mx-auto py-12 px-4 sm:px-6 lg:px-8">
+        <div className="bg-gray-50 dark:bg-gray-800 p-8 rounded-lg border border-border text-center">
+          <p className="text-muted text-xl">Group not found</p>
+          <Link
+            href="/groups"
+            className="btn-primary mt-4"
+          >
+            Return to Groups
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  const pendingContributions = memberContributions.filter(c => c.status === 'PENDING' || c.status === 'PARTIAL' || c.status === 'OVERDUE');
+  const completedContributions = memberContributions.filter(c => c.status === 'PAID');
+  const totalExpected = memberContributions.reduce((sum, c) => sum + c.totalExpected, 0);
+  const totalCollected = memberContributions.reduce((sum, c) => sum + c.paidAmount, 0);
+  const totalRemaining = memberContributions.reduce((sum, c) => sum + c.remainingAmount, 0);
+  const totalLateFines = memberContributions.reduce((sum, c) => sum + c.lateFineAmount, 0);
+  
+  // Check if late fines are enabled for this group
+  const lateFinesEnabled = group?.lateFineRules?.[0]?.isEnabled || false;
+
+  return (
+    <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-4 mb-10 pb-6 border-b border-border">
+        <div>
+          <h1 className="text-4xl font-bold text-foreground">Track Contributions</h1>
+          <p className="mt-1 text-sm text-muted">
+            Group: {group.name} | Members: {memberContributions.length}
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            Monthly Contribution: ₹{group.monthlyContribution || 0} | Interest Rate: {group.interestRate || 0}%
+            {group.collectionFrequency && ` | Frequency: ${group.collectionFrequency}`}
+            {group.collectionDayOfMonth && group.collectionFrequency === 'MONTHLY' && ` | Due: ${group.collectionDayOfMonth}${getOrdinalSuffix(group.collectionDayOfMonth)} of each month`}
+            {group.collectionDayOfWeek && (group.collectionFrequency === 'WEEKLY' || group.collectionFrequency === 'FORTNIGHTLY') && ` | Due: ${group.collectionDayOfWeek}s`}
+            {lateFinesEnabled && ` | Late Fines: Enabled`}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <Link
+            href={`/groups/${groupId}`}
+            className="btn-secondary"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+            </svg>
+            Back to Group
+          </Link>
+        </div>
+      </div>
+
+      {/* Period Management Section */}
+      <div className="card mb-6">
+        <div className="p-6">
+          <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+            <div>
+              <h2 className="text-2xl font-bold text-foreground">
+                {showOldContributions ? 'Historical Contributions' : 'Contribution Tracking'}
+              </h2>
+              <p className="text-sm text-muted mt-1">
+                {showOldContributions 
+                  ? `Viewing: ${formatPeriodName(oldPeriods.find(p => p.id === selectedPeriodId))}`
+                  : getCurrentPeriodName()
+                }
+              </p>
+              {showOldContributions && selectedPeriodId && (
+                <p className="text-xs text-muted mt-1">
+                  Period closed on: {(() => {
+                    const period = oldPeriods.find(p => p.id === selectedPeriodId);
+                    return period?.updatedAt ? new Date(period.updatedAt).toLocaleString() : 'Unknown';
+                  })()}
+                </p>
+              )}
+            </div>
+            
+            <div className="flex flex-wrap gap-3">
+              {!showOldContributions && (
+                <>
+                  <button
+                    onClick={() => setShowOldContributions(true)}
+                    className="btn-secondary"
+                    disabled={oldPeriods.length === 0}
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    View History ({oldPeriods.length})
+                  </button>
+                  
+                  {group.userPermissions?.canEdit && (
+                    <div>
+                      {/* Debug info - will display the current session and leader info */}
+                      <details className="text-xs mb-2 text-left bg-blue-50 p-2 rounded">
+                        <summary className="font-bold cursor-pointer">Debug Leadership Info</summary>
+                        <div className="mt-1 space-y-1">
+                          <p>Your ID: {session?.user?.id || 'Not available'}</p>
+                          <p>Leader ID: {group.leader?.id || 'Not available'}</p>
+                          <p>Match: {session?.user?.id === group.leader?.id ? 'Yes ✅' : 'No ❌'}</p>
+                          <p>Leader name: {group.leader?.name || 'Not available'}</p>
+                          <p>Session user name: {session?.user?.name || 'Not available'}</p>
+                        </div>
+                      </details>
+                      
+                      <button
+                        onClick={closePeriod}
+                        disabled={closingPeriod || !currentPeriod || pendingContributions.length === 0}
+                        className="btn-primary bg-green-600 hover:bg-green-700"
+                        title="Close the current period and create a new one"
+                      >
+                        {closingPeriod ? (
+                          <>
+                            <svg className="animate-spin h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                              <path className="opacity-75" fill="currentColor" d="m4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            Closing...
+                          </>
+                        ) : (
+                          <>
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                            </svg>
+                            Close This {
+                              group.collectionFrequency === 'WEEKLY' ? 'Week' :
+                              group.collectionFrequency === 'FORTNIGHTLY' ? 'Fortnight' :
+                              group.collectionFrequency === 'MONTHLY' ? 'Month' :
+                              group.collectionFrequency === 'YEARLY' ? 'Year' :
+                              'Period'
+                            }
+                          </>
+                        )}
+                      </button>
+                    </div>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </>
+              )}
+              
+              {showOldContributions && (
+                <>
+                  <select
+                    value={selectedPeriodId}
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        viewOldContributions(e.target.value);
+                      }
+                    }}
+                    className="px-3 py-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                  >
+                    <option value="">Select Period</option>
+                    {oldPeriods.map((period) => (
+                      <option key={period.id} value={period.id}>
+                        {formatPeriodName(period)} - Closed {period.updatedAt ? new Date(period.updatedAt).toLocaleDateString() : 'Unknown'}
+                      </option>
+                    ))}
+                  </select>
+                  
+                  <button
+                    onClick={returnToCurrentPeriod}
+                    className="btn-secondary"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 17l-5-5m0 0l5-5m-5 5h12" />
+                    </svg>
+                    Back to Current
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+          
+          {/* Period Status Indicator */}
+          <div className="flex items-center gap-2 mt-4">
+            <div className={`w-3 h-3 rounded-full ${showOldContributions ? 'bg-gray-400' : 'bg-green-500'}`}></div>
+            <span className="text-sm text-muted">
+              {showOldContributions ? 'Historical Period (Closed)' : 'Active Period (Open for contributions)'}
+            </span>
+            {!showOldContributions && totalRemaining === 0 && pendingContributions.length === 0 && (
+              <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full ml-2">
+                All contributions collected - Ready to close
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Financial Overview */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+        <div className="card bg-primary/10 dark:bg-primary/20 border-primary/20">
+          <div className="p-4">
+            <h3 className="text-lg font-semibold text-primary">Total Members</h3>
+            <p className="text-2xl font-bold text-primary">{memberContributions.length}</p>
+          </div>
+        </div>
+        <div className="card bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-700/50">
+          <div className="p-4">
+            <h3 className="text-lg font-semibold text-green-700 dark:text-green-300">Total Expected</h3>
+            <p className="text-2xl font-bold text-green-600 dark:text-green-400">₹{totalExpected.toLocaleString()}</p>
+          </div>
+        </div>
+        <div className="card bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-700/50">
+          <div className="p-4">
+            <h3 className="text-lg font-semibold text-blue-700 dark:text-blue-300">Total Collected</h3>
+            <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">₹{totalCollected.toLocaleString()}</p>
+          </div>
+        </div>
+        {lateFinesEnabled && (
+          <div className="card bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-700/50">
+            <div className="p-4">
+              <h3 className="text-lg font-semibold text-red-700 dark:text-red-300">Total Late Fines</h3>
+              <p className="text-2xl font-bold text-red-600 dark:text-red-400">₹{totalLateFines.toLocaleString()}</p>
+            </div>
+          </div>
+        )}
+        <div className="card bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-700/50">
+          <div className="p-4">
+            <h3 className="text-lg font-semibold text-orange-700 dark:text-orange-300">Remaining</h3>
+            <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">₹{totalRemaining.toLocaleString()}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Progress Bar */}
+      <div className="card mb-6">
+        <div className="p-4">
+          <div className="flex justify-between text-sm text-muted mb-2">
+            <span>Collection Progress</span>
+            <span>{totalExpected > 0 ? Math.round((totalCollected / totalExpected) * 100) : 0}%</span>
+          </div>
+          <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3">
+            <div 
+              className="bg-gradient-to-r from-primary to-secondary h-3 rounded-full transition-all duration-500"
+              style={{ width: `${totalExpected > 0 ? Math.min((totalCollected / totalExpected) * 100, 100) : 0}%` }}
+            ></div>
+          </div>
+          <div className="flex justify-between mt-2 text-xs text-muted">
+            <span>₹{totalCollected.toLocaleString()} collected</span>
+            <span>₹{totalExpected.toLocaleString()} target</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Filter Toggle */}
+      <div className="mb-6">
+        <div className="flex space-x-4">
+          <button
+            onClick={() => setShowCompleted(false)}
+            className={`px-6 py-3 rounded-lg transition-all duration-200 font-medium ${
+              !showCompleted 
+                ? 'bg-primary text-white shadow-lg transform scale-105' 
+                : 'bg-card-bg text-muted border border-border hover:border-primary/50 hover:text-primary'
+            }`}
+          >
+            Pending ({pendingContributions.length})
+          </button>
+          <button
+            onClick={() => setShowCompleted(true)}
+            className={`px-6 py-3 rounded-lg transition-all duration-200 font-medium ${
+              showCompleted 
+                ? 'bg-secondary text-white shadow-lg transform scale-105' 
+                : 'bg-card-bg text-muted border border-border hover:border-secondary/50 hover:text-secondary'
+            }`}
+          >
+            Completed ({completedContributions.length})
+          </button>
+        </div>
+      </div>
+
+      {/* Contributions List */}
+      <div className="card mb-6 overflow-hidden">
+        <div className="px-6 py-4 border-b border-border bg-hover">
+          <h2 className="text-lg font-semibold text-foreground">
+            {showCompleted ? 'Completed Contributions' : 'Pending Contributions'}
+          </h2>
+          <p className="text-sm text-muted mt-1">
+            {showCompleted 
+              ? `${completedContributions.length} members have completed their contributions`
+              : `${pendingContributions.length} members have pending contributions`
+            }
+          </p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full">
+            <thead>
+              <tr className="border-b border-border">
+                <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">Member</th>
+                <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">Monthly Contribution</th>
+                <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">Interest Due</th>
+                {lateFinesEnabled && (
+                  <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">Late Fine (Contribution)</th>
+                )}
+                <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">Total Expected</th>
+                <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">Amount Paid</th>
+                <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">Remaining</th>
+                <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">Status</th>
+                <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {(showCompleted ? completedContributions : pendingContributions).map((contribution) => (
+                <tr 
+                  key={contribution.memberId} 
+                  className={`transition-colors duration-150 hover:bg-hover ${
+                    contribution.status === 'PARTIAL' ? 'bg-yellow-50/50 dark:bg-yellow-900/10' : 
+                    contribution.status === 'OVERDUE' ? 'bg-red-50/50 dark:bg-red-900/10' : ''
+                  }`}
+                >
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="text-sm font-medium text-foreground">{contribution.memberName}</div>
+                    {contribution.currentLoanBalance > 0 && (
+                      <div className="text-sm text-muted">Active Loan: ₹{contribution.currentLoanBalance.toLocaleString()}</div>
+                    )}
+                    {contribution.daysLate > 0 && (
+                      <div className="text-sm text-red-600 dark:text-red-400">
+                        {contribution.daysLate} day{contribution.daysLate > 1 ? 's' : ''} late
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-foreground font-medium">
+                    ₹{contribution.expectedContribution.toLocaleString()}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-foreground">
+                    ₹{contribution.expectedInterest.toLocaleString()}
+                  </td>
+                  {lateFinesEnabled && (
+                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                      <span className={`font-medium ${
+                        contribution.lateFineAmount > 0 ? 'text-red-600 dark:text-red-400' : 'text-muted'
+                      }`}>
+                        ₹{contribution.lateFineAmount.toLocaleString()}
+                      </span>
+                      {contribution.daysLate > 0 && contribution.lateFineAmount > 0 && (
+                        <div className="text-xs text-red-500 dark:text-red-400">
+                          ({contribution.daysLate} days)
+                        </div>
+                      )}
+                    </td>
+                  )}
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-primary">
+                    ₹{contribution.totalExpected.toLocaleString()}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-foreground">
+                    <span className="font-medium">₹{contribution.paidAmount.toLocaleString()}</span>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm">
+                    <span className={`font-medium ${
+                      contribution.remainingAmount > 0 ? 'text-orange-600 dark:text-orange-400' : 'text-green-600 dark:text-green-400'
+                    }`}>
+                      ₹{contribution.remainingAmount.toLocaleString()}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <span className={`px-3 py-1 text-xs font-semibold rounded-full ${
+                      contribution.status === 'PAID' 
+                        ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300' :
+                      contribution.status === 'PARTIAL' 
+                        ? 'bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-300' :
+                      contribution.status === 'OVERDUE'
+                        ? 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-300' :
+                        'bg-gray-100 dark:bg-gray-700/30 text-gray-800 dark:text-gray-300'
+                    }`}>
+                      {contribution.status}
+                    </span>
+                  </td>
+                  {!showCompleted && contribution.remainingAmount > 0 && (
+                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                      <button
+                        onClick={() => {
+                          setSelectedMember({
+                            id: contribution.memberId,
+                            name: contribution.memberName,
+                            expectedContribution: contribution.expectedContribution,
+                            expectedInterest: contribution.expectedInterest,
+                            remainingAmount: contribution.remainingAmount,
+                            lateFineAmount: contribution.lateFineAmount,
+                            daysLate: contribution.daysLate
+                          });
+                          setPaymentAmount(contribution.remainingAmount.toString());
+                          setContributionAllocation({ cashInHand: 0, cashInBank: 0 });
+                          setInterestAllocation({ cashInHand: 0, cashInBank: 0 });
+                          setShowPaymentModal(true);
+                        }}
+                        disabled={savingPayment === contribution.memberId}
+                        className="btn-primary text-xs py-2 px-3 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {savingPayment === contribution.memberId ? 'Saving...' : 'Mark Paid'}
+                      </button>
+                    </td>
+                  )}
+                  {!showCompleted && contribution.remainingAmount === 0 && (
+                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                      <span className="text-green-600 dark:text-green-400 font-medium">✓ Complete</span>
+                    </td>
+                  )}
+                  {showCompleted && (
+                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                      <button
+                        onClick={() => markContributionUnpaid(contribution.memberId)}
+                        disabled={savingPayment === contribution.memberId}
+                        className="btn-secondary text-xs py-2 px-3 disabled:opacity-50 disabled:cursor-not-allowed bg-red-100 hover:bg-red-200 text-red-700 border-red-300"
+                      >
+                        {savingPayment === contribution.memberId ? 'Processing...' : 'Mark Unpaid'}
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+              {(showCompleted ? completedContributions : pendingContributions).length === 0 && (
+                <tr>
+                  <td colSpan={lateFinesEnabled ? 9 : 8} className="px-6 py-12 text-center">
+                    <div className="text-muted">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mx-auto mb-4 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                      <p className="text-lg">
+                        {showCompleted ? 'No completed contributions yet' : 'No pending contributions'}
+                      </p>
+                      <p className="text-sm mt-1">
+                        {showCompleted 
+                          ? 'Contributions will appear here once members make payments' 
+                          : 'All members have completed their contributions for this period'
+                        }
+                      </p>
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Debug Group Leader Info */}
+      <div className="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded-md">
+        <h4 className="text-sm font-semibold mb-1">Debug Group Leader Info:</h4>
+        <div className="text-xs space-y-1">
+          <p>Your User ID: {session?.user?.id || 'No user ID found'}</p>
+          <p>Group Leader ID: {group?.leader?.id || 'No leader ID found'}</p>
+          <p>Leader Name: {group?.leader?.name || 'No leader name found'}</p>
+          <p>Are You Leader: {session?.user?.id === group?.leader?.id ? 'Yes ✓' : 'No ✗'}</p>
+        </div>
+      </div>
+      
+      {/* Action Buttons */}
+      <div className="flex flex-wrap gap-4 justify-between items-center mt-4">
+        <div className="flex flex-wrap gap-3">
+          <button
+            onClick={generateReport}
+            className="btn-secondary bg-purple-100 hover:bg-purple-200 text-purple-700 border-purple-300 dark:bg-purple-900/30 dark:hover:bg-purple-800/50 dark:text-purple-300 dark:border-purple-700/50"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            Generate Report
+          </button>
+
+          {/* Leader ID Debug Info */}
+          <div className="bg-yellow-50 border border-yellow-200 rounded-md p-2 text-xs mb-2">
+            <p>Your ID: <strong>{session?.user?.id || 'Not logged in'}</strong></p>
+            <p>Leader ID: <strong>{group?.leader?.id || 'Unknown'}</strong></p>
+            <p>Match: <strong>{session?.user?.id === group?.leader?.id ? 'Yes ✓' : 'No ✗'}</strong></p>
+          </div>
+
+          {/* Close Period Button - Only for Group Leaders */}
+          {session?.user?.id && group?.leader?.id && String(session?.user?.id) === String(group?.leader?.id) ? (
+            <button
+              onClick={() => setShowClosePeriodModal(true)}
+              disabled={closingPeriod}
+              className="btn-secondary bg-red-100 hover:bg-red-200 text-red-700 border-red-300 dark:bg-red-900/30 dark:hover:bg-red-800/50 dark:text-red-300 dark:border-red-700/50 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Close the current contribution period and start a new one"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+              </svg>
+              {closingPeriod ? 'Closing...' : 'Close Period'}
+            </button>
+          ) : (
+            <div
+              className="btn-secondary bg-gray-100 hover:bg-gray-100 text-gray-400 border-gray-300 cursor-not-allowed opacity-50"
+              title={`Only the group leader (${group?.leader?.name}) can close periods`}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+              Close Period (Leader Only)
+            </div>
+          )}
+          
+          <button
+            onClick={() => {
+              const refreshed = confirm('This will refresh the contribution status. Continue?');
+              if (refreshed) {
+                fetchGroupData();
+              }
+            }}
+            className="btn-secondary"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            Refresh Data
+          </button>
+        </div>
+
+        <div className="text-sm text-muted">
+          <p>Last updated: {new Date().toLocaleString()}</p>
+          <p className="mt-1">
+            Collection rate: {totalExpected > 0 ? ((totalCollected / totalExpected) * 100).toFixed(1) : 0}%
+          </p>
+          {/* Debug info for group leader check - will help diagnose ID issues */}
+          <div className="mt-2 p-2 border border-yellow-200 bg-yellow-50 rounded text-xs text-gray-700">
+            <p>Your ID: <strong>{session?.user?.id || 'Not logged in'}</strong></p>
+            <p>Leader ID: <strong>{group?.leader?.id || 'Unknown'}</strong></p>
+            <p>Type check: Your ID ({typeof session?.user?.id}), Leader ID ({typeof group?.leader?.id})</p>
+            <p>String equals: {String(session?.user?.id) === String(group?.leader?.id) ? '✓ Yes' : '✗ No'}</p>
+            <p>Direct equals: {session?.user?.id === group?.leader?.id ? '✓ Yes' : '✗ No'}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Info Note */}
+      <div className="mt-8 card bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-700/50">
+        <div className="p-4">
+          <div className="flex items-start space-x-3">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-blue-600 dark:text-blue-400 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <div>
+              <h3 className="text-sm font-semibold text-blue-800 dark:text-blue-300">About Contribution Tracking</h3>
+              <p className="text-sm text-blue-700 dark:text-blue-400 mt-1">
+                This page tracks member contributions based on your group&apos;s settings. 
+                Monthly contributions of ₹{group?.monthlyContribution || 0} are expected from each member.
+                {group?.interestRate && group?.interestRate > 0 && (
+                  <span> Interest on active loans is calculated at {group?.interestRate}% rate.</span>
+                )}
+                {group?.collectionFrequency && (
+                  <span> Collection frequency is set to {group?.collectionFrequency.toLowerCase()}.</span>
+                )}
+                {lateFinesEnabled && (
+                  <span> Late fines are automatically calculated for overdue payments based on your group&apos;s late fine rules.</span>
+                )}
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Payment Modal */}
+      {showPaymentModal && selectedMember && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                  Record Payment - {selectedMember.name}
+                </h3>
+                <button
+                  onClick={() => setShowPaymentModal(false)}
+                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Payment Summary */}
+              <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 mb-4">
+                <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Outstanding Amounts</h4>
+                <div className="space-y-1 text-sm">
+                  <div className="flex justify-between">
+                    <span>Compulsory Contribution:</span>
+                    <span className="font-medium">₹{selectedMember.expectedContribution.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Interest:</span>
+                    <span className="font-medium">₹{selectedMember.expectedInterest.toLocaleString()}</span>
+                  </div>
+                  {lateFinesEnabled && selectedMember.lateFineAmount && selectedMember.lateFineAmount > 0 && (
+                    <div className="flex justify-between">
+                      <span>Late Fine (for contribution):</span>
+                      <span className="font-medium text-red-600 dark:text-red-400">₹{selectedMember.lateFineAmount.toLocaleString()}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between border-t border-gray-300 dark:border-gray-600 pt-1 font-semibold">
+                    <span>Total Remaining:</span>
+                    <span>₹{selectedMember.remainingAmount.toLocaleString()}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Payment Amount */}
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Payment Amount (₹)
+                </label>
+                <input
+                  type="number"
+                  value={paymentAmount}
+                  onChange={(e) => {
+                    setPaymentAmount(e.target.value);
+                    calculateAutoAllocation();
+                  }}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-primary dark:bg-gray-700 dark:text-gray-100"
+                  min="0"
+                  max={selectedMember.remainingAmount}
+                  step="0.01"
+                />
+                <div className="flex justify-between items-center mt-2">
+                  <span className="text-xs text-gray-500">
+                    Max: ₹{selectedMember.remainingAmount.toLocaleString()}
+                  </span>
+                  <div className="space-x-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPaymentAmount(selectedMember.expectedContribution.toString());
+                        calculateAutoAllocation();
+                      }}
+                      className="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                    >
+                      Pay Contribution Only
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPaymentAmount(selectedMember.remainingAmount.toString());
+                        calculateAutoAllocation();
+                      }}
+                      className="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                    >
+                      Pay Full Amount
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-3 text-center">
+                  <button
+                    type="button"
+                    onClick={calculateAutoAllocation}
+                    className="px-3 py-1 text-xs bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 rounded"
+                  >
+                    Auto-Allocate (30% Hand, 70% Bank)
+                  </button>
+                </div>
+              </div>
+
+              {/* Cash Allocation for Compulsory Contribution */}
+              {selectedMember.expectedContribution > 0 && (
+                <div className="mb-4">
+                  <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+                    Compulsory Contribution Allocation
+                  </h4>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Cash in Hand (₹)</label>
+                      <input
+                        type="number"
+                        value={contributionAllocation.cashInHand}
+                        onChange={(e) => {
+                          const value = Number(e.target.value) || 0;
+                          setContributionAllocation(prev => ({
+                            ...prev,
+                            cashInHand: value
+                          }));
+                        }}
+                        className="w-full px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-primary dark:bg-gray-700 dark:text-gray-100"
+                        min="0"
+                        step="0.01"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Cash in Bank (₹)</label>
+                      <input
+                        type="number"
+                        value={contributionAllocation.cashInBank}
+                        onChange={(e) => {
+                          const value = Number(e.target.value) || 0;
+                          setContributionAllocation(prev => ({
+                            ...prev,
+                            cashInBank: value
+                          }));
+                        }}
+                        className="w-full px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-primary dark:bg-gray-700 dark:text-gray-100"
+                        min="0"
+                        step="0.01"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-between mt-2 text-xs">
+                    <span className="text-gray-600 dark:text-gray-400">
+                      Total: ₹{(contributionAllocation.cashInHand + contributionAllocation.cashInBank).toLocaleString()}
+                    </span>
+                    <div className="space-x-2">
+                      <button
+                        type="button"
+                        onClick={() => setContributionAllocation({
+                          cashInHand: selectedMember.expectedContribution,
+                          cashInBank: 0
+                        })}
+                        className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                      >
+                        All Hand
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setContributionAllocation({
+                          cashInHand: 0,
+                          cashInBank: selectedMember.expectedContribution
+                        })}
+                        className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                      >
+                        All Bank
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Cash Allocation for Interest */}
+              {selectedMember.expectedInterest > 0 && (
+                <div className="mb-6">
+                  <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
+                    Interest Allocation
+                  </h4>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Cash in Hand (₹)</label>
+                      <input
+                        type="number"
+                        value={interestAllocation.cashInHand}
+                        onChange={(e) => {
+                          const value = Number(e.target.value) || 0;
+                          setInterestAllocation(prev => ({
+                            ...prev,
+                            cashInHand: value
+                          }));
+                        }}
+                        className="w-full px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-primary dark:bg-gray-700 dark:text-gray-100"
+                        min="0"
+                        step="0.01"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Cash in Bank (₹)</label>
+                      <input
+                        type="number"
+                        value={interestAllocation.cashInBank}
+                        onChange={(e) => {
+                          const value = Number(e.target.value) || 0;
+                          setInterestAllocation(prev => ({
+                            ...prev,
+                            cashInBank: value
+                          }));
+                        }}
+                        className="w-full px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-primary dark:bg-gray-700 dark:text-gray-100"
+                        min="0"
+                        step="0.01"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-between mt-2 text-xs">
+                    <span className="text-gray-600 dark:text-gray-400">
+                      Total: ₹{(interestAllocation.cashInHand + interestAllocation.cashInBank).toLocaleString()}
+                    </span>
+                    <div className="space-x-2">
+                      <button
+                        type="button"
+                        onClick={() => setInterestAllocation({
+                          cashInHand: selectedMember.expectedInterest,
+                          cashInBank: 0
+                        })}
+                        className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                      >
+                        All Hand
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setInterestAllocation({
+                          cashInHand: 0,
+                          cashInBank: selectedMember.expectedInterest
+                        })}
+                        className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                      >
+                        All Bank
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="mb-3">
+                <div className="text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700 p-2 rounded">
+                  <strong>Default Allocation:</strong> If you don't manually allocate cash, the payment will go to Cash in Hand by default.
+                </div>
+              </div>
+              
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowPaymentModal(false)}
+                  className="flex-1 px-4 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    const amount = Number(paymentAmount);
+                    if (amount > 0 && amount <= selectedMember.remainingAmount) {
+                      // Check if user has manually allocated the cash
+                      const totalContributionAllocated = contributionAllocation.cashInHand + contributionAllocation.cashInBank;
+                      const totalInterestAllocated = interestAllocation.cashInHand + interestAllocation.cashInBank;
+                      
+                      // Calculate how much payment goes to contribution vs interest
+                      let contributionPayment = 0;
+                      let interestPayment = 0;
+                      let remainingPayment = amount;
+                      
+                      // Allocate to contribution first
+                      if (remainingPayment > 0 && selectedMember.expectedContribution > 0) {
+                        contributionPayment = Math.min(remainingPayment, selectedMember.expectedContribution);
+                        remainingPayment -= contributionPayment;
+                      }
+                      
+                      // Then allocate to interest
+                      if (remainingPayment > 0 && selectedMember.expectedInterest > 0) {
+                        interestPayment = Math.min(remainingPayment, selectedMember.expectedInterest);
+                        remainingPayment -= interestPayment;
+                      }
+                      
+                      // If user hasn't manually allocated, use default allocation (all to cash in hand)
+                      let finalContributionAllocation = contributionAllocation;
+                      let finalInterestAllocation = interestAllocation;
+                      
+                      if (totalContributionAllocated === 0 && contributionPayment > 0) {
+                        finalContributionAllocation = {
+                          cashInHand: contributionPayment,
+                          cashInBank: 0
+                        };
+                      }
+                      
+                      if (totalInterestAllocated === 0 && interestPayment > 0) {
+                        finalInterestAllocation = {
+                          cashInHand: interestPayment,
+                          cashInBank: 0
+                        };
+                      }
+                      
+                      const cashAllocation = {
+                        contributionToCashInHand: finalContributionAllocation.cashInHand,
+                        contributionToCashInBank: finalContributionAllocation.cashInBank,
+                        interestToCashInHand: finalInterestAllocation.cashInHand,
+                        interestToCashInBank: finalInterestAllocation.cashInBank
+                      };
+                      
+                      setShowPaymentModal(false);
+                      await markContributionPaid(selectedMember.id, amount, cashAllocation);
+                    } else {
+                      alert('Please enter a valid payment amount');
+
+                    }
+                  }}
+                  disabled={!paymentAmount || Number(paymentAmount) <= 0 || Number(paymentAmount) > selectedMember.remainingAmount}
+                  className="flex-1 px-4 py-2 text-sm bg-primary text-white rounded-md hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Record Payment
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Report Generation Modal */}
+      {showReportModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-md mx-4 shadow-xl">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                Generate Report
+              </h3>
+              <button
+                onClick={() => setShowReportModal(false)}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            
+            <div className="space-y-4">
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                Choose the format for your contribution report:
+              </p>
+              
+              <div className="space-y-3">
+                <button
+                  onClick={generatePDFReport}
+                  className="w-full flex items-center justify-between p-4 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                >
+                  <div className="flex items-center">
+                    <svg className="w-8 h-8 text-red-600 mr-3" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z" clipRule="evenodd" />
+                    </svg>
+                    <div className="text-left">
+                      <div className="font-medium text-gray-900 dark:text-gray-100">PDF Report</div>
+                      <div className="text-sm text-gray-500 dark:text-gray-400">Formatted document with tables</div>
+                    </div>
+                  </div>
+                  <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
+
+                <button
+                  onClick={generateExcelReport}
+                  className="w-full flex items-center justify-between p-4 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                >
+                  <div className="flex items-center">
+                    <svg className="w-8 h-8 text-green-600 mr-3" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z" clipRule="evenodd" />
+                    </svg>
+                    <div className="text-left">
+                      <div className="font-medium text-gray-900 dark:text-gray-100">Excel Report</div>
+                      <div className="text-sm text-gray-500 dark:text-gray-400">Spreadsheet with calculations</div>
+                    </div>
+                  </div>
+                  <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
+
+                <button
+                  onClick={generateCSVReport}
+                  className="w-full flex items-center justify-between p-4 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                >
+                  <div className="flex items-center">
+                    <svg className="w-8 h-8 text-blue-600 mr-3" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M4 4a2 2 0 012-2h4.586A2 2 0 0112 2.586L15.414 6A2 2 0 0116 7.414V16a2 2 0 01-2 2H6a2 2 0 01-2-2V4zm2 6a1 1 0 011-1h6a1 1 0 110 2H7a1 1 0 01-1-1zm1 3a1 1 0 100 2h6a1 1 0 100-2H7z" clipRule="evenodd" />
+                    </svg>
+                    <div className="text-left">
+                      <div className="font-medium text-gray-900 dark:text-gray-100">CSV Report</div>
+                      <div className="text-sm text-gray-500 dark:text-gray-400">Data for import/analysis</div>
+                    </div>
+                  </div>
+                  <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="pt-4 border-t border-gray-200 dark:border-gray-600">
+                <button
+                  onClick={() => setShowReportModal(false)}
+                  className="w-full px-4 py-2 text-sm text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Close Period Confirmation Modal */}
+      {showClosePeriodModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-md mx-4 shadow-xl">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                Close Period Confirmation
+              </h3>
+              <button
+                onClick={() => setShowClosePeriodModal(false)}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            
+            <div className="space-y-4">
+              <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
+                <div className="flex items-start">
+                  <svg className="w-5 h-5 text-amber-600 dark:text-amber-400 mt-0.5 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                  </svg>
+                  <div>
+                    <h4 className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                      Important Notice
+                    </h4>
+                    <p className="text-sm text-amber-700 dark:text-amber-300 mt-1">
+                      Closing this period will finalize all contributions and move to the next period. 
+                      This action cannot be undone.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="text-sm text-gray-600 dark:text-gray-400">
+                  <p><strong>Current Period:</strong> {currentPeriod?.startDate ? new Date(currentPeriod.startDate).toLocaleDateString() : 'Unknown'} - {currentPeriod?.endDate ? new Date(currentPeriod.endDate).toLocaleDateString() : 'Unknown'}</p>
+                  <p><strong>Total Contributions:</strong> ₹{memberContributions.reduce((sum: number, member: MemberContributionStatus) => sum + member.paidAmount, 0).toLocaleString()}</p>
+                  <p><strong>Pending Collections:</strong> ₹{memberContributions.reduce((sum: number, member: MemberContributionStatus) => sum + member.remainingAmount, 0).toLocaleString()}</p>
+                </div>
+              </div>
+
+              <div className="flex space-x-3 pt-4">
+                <button
+                  onClick={() => setShowClosePeriodModal(false)}
+                  className="flex-1 px-4 py-2 text-sm text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleClosePeriod}
+                  disabled={closingPeriod}
+                  className="flex-1 px-4 py-2 text-sm bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                >
+                  {closingPeriod ? (
+                    <>
+                      <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Closing...
+                    </>
+                  ) : (
+                    'Close Period'
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+}

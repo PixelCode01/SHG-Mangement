@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Members Remaining Feature Preview</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for animation effects */
+        .animate-pulse-custom {
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.8; }
+        }
+        
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+        
+        .scrollbar-hide {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 p-8">
+    <div class="max-w-4xl mx-auto">
+        <h1 class="text-3xl font-bold text-gray-900 mb-8">SHG Management - Members Remaining Feature</h1>
+        
+        <!-- Progress Bar Section -->
+        <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+            <div class="flex justify-between items-center mb-3">
+                <h3 class="text-lg font-semibold text-gray-900">Collection Progress</h3>
+                <span class="text-sm font-medium text-blue-600">
+                    67% ₹100,500 collected
+                </span>
+            </div>
+            
+            <!-- Enhanced Progress Bar -->
+            <div class="relative">
+                <div class="w-full bg-gray-200 rounded-full h-6 shadow-inner">
+                    <div 
+                        class="bg-gradient-to-r from-green-500 to-blue-500 h-6 rounded-full transition-all duration-700 ease-out shadow-lg relative overflow-hidden"
+                        style="width: 67%"
+                    >
+                        <!-- Animated shine effect -->
+                        <div class="absolute top-0 left-0 w-full h-full bg-gradient-to-r from-transparent via-white/20 to-transparent animate-pulse-custom"></div>
+                        
+                        <!-- Percentage text inside bar -->
+                        <div class="absolute inset-0 flex items-center justify-center">
+                            <span class="text-white font-bold text-sm drop-shadow-lg">67%</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Progress details -->
+            <div class="flex justify-between mt-3 text-sm">
+                <div class="flex items-center space-x-4">
+                    <span class="text-gray-600">Target: ₹150,000</span>
+                    <span class="text-green-600 font-medium">Collected: ₹100,500</span>
+                </div>
+                <span class="text-orange-600 font-medium">Remaining: ₹49,500</span>
+            </div>
+            
+            <!-- Member Progress Section -->
+            <div class="mt-4 pt-3 border-t border-gray-200">
+                <div class="flex justify-between items-center text-sm">
+                    <div class="flex items-center space-x-4">
+                        <span class="text-gray-600">
+                            Total Members: <span class="font-medium">15</span>
+                        </span>
+                        <span class="text-green-600 font-medium">Paid: 10</span>
+                        <span class="text-orange-600 font-medium">Pending: 5</span>
+                    </div>
+                    <div class="text-right">
+                        <span class="text-gray-600 text-xs">67% members completed</span>
+                    </div>
+                </div>
+                
+                <!-- Member Progress Bar -->
+                <div class="mt-2">
+                    <div class="w-full bg-gray-200 rounded-full h-2">
+                        <div 
+                            class="bg-gradient-to-r from-purple-500 to-pink-500 h-2 rounded-full transition-all duration-500"
+                            style="width: 67%"
+                        ></div>
+                    </div>
+                </div>
+                
+                <!-- NEW: Remaining Members Display -->
+                <div class="mt-4 pt-3 border-t border-gray-200">
+                    <div class="flex items-center justify-between mb-2">
+                        <h4 class="text-sm font-medium text-gray-900">Members Yet to Pay</h4>
+                        <span class="text-xs text-gray-600">5 remaining</span>
+                    </div>
+                    
+                    <div class="max-h-24 overflow-y-auto scrollbar-hide">
+                        <div class="flex flex-wrap gap-2">
+                            <!-- Pending Member -->
+                            <div class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800"
+                                 title="Jane Smith - ₹10,000 remaining">
+                                Jane Smith
+                            </div>
+                            
+                            <!-- Partial Payment Member -->
+                            <div class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800"
+                                 title="Bob Johnson - ₹5,000 remaining">
+                                Bob Johnson
+                                <span class="ml-1 text-xs">(₹5,000)</span>
+                            </div>
+                            
+                            <!-- Overdue Member -->
+                            <div class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800"
+                                 title="Alice Brown - ₹10,000 remaining (3 days late)">
+                                Alice Brown
+                                <span class="ml-1 text-xs text-red-600">⏰</span>
+                            </div>
+                            
+                            <!-- More Pending Members -->
+                            <div class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-orange-100 text-orange-800">
+                                Charlie Davis
+                            </div>
+                            
+                            <!-- Overdue Member -->
+                            <div class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-red-100 text-red-800"
+                                 title="Diana Wilson - ₹10,000 remaining (5 days late)">
+                                Diana Wilson
+                                <span class="ml-1 text-xs text-red-600">⏰</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-2 text-xs text-gray-600">
+                        Color coding: <span class="text-orange-600">●</span> Pending 
+                        <span class="text-yellow-600">●</span> Partial 
+                        <span class="text-red-600">●</span> Overdue ⏰
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Feature Explanation -->
+        <div class="bg-blue-50 rounded-lg p-6 border border-blue-200">
+            <h2 class="text-xl font-semibold text-blue-900 mb-4">✨ New Feature: Members Remaining Display</h2>
+            
+            <div class="grid md:grid-cols-2 gap-6">
+                <div>
+                    <h3 class="font-medium text-blue-800 mb-2">🎯 What it shows:</h3>
+                    <ul class="text-sm text-blue-700 space-y-1">
+                        <li>• List of members who haven't paid yet</li>
+                        <li>• Color-coded status indicators</li>
+                        <li>• Remaining amounts for partial payments</li>
+                        <li>• Late indicators with clock emoji</li>
+                        <li>• Quick overview without scrolling through full table</li>
+                    </ul>
+                </div>
+                
+                <div>
+                    <h3 class="font-medium text-blue-800 mb-2">🎨 Design Features:</h3>
+                    <ul class="text-sm text-blue-700 space-y-1">
+                        <li>• Compact, scrollable view (max 24px height)</li>
+                        <li>• Shows first 10 members with "+X more" indicator</li>
+                        <li>• Tooltips with detailed information</li>
+                        <li>• Integrated with existing progress section</li>
+                        <li>• Responsive design with proper spacing</li>
+                    </ul>
+                </div>
+            </div>
+            
+            <div class="mt-4 p-3 bg-blue-100 rounded border border-blue-300">
+                <p class="text-sm text-blue-800">
+                    <strong>📍 Location:</strong> This new section appears below the member progress bar in the Collection Progress card, 
+                    providing immediate visibility of who still needs to pay without requiring users to scroll to the full contributions table.
+                </p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

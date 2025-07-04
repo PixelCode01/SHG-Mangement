@@ -1,0 +1,554 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  GROUP_LEADER
+  MEMBER
+}
+
+enum CollectionFrequency {
+  WEEKLY
+  FORTNIGHTLY
+  MONTHLY
+  YEARLY
+}
+
+// Add enum for day of week
+enum DayOfWeek {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
+// Add enum for late fine rule type
+enum LateFineRuleType {
+  DAILY_FIXED      // Fixed amount per day
+  DAILY_PERCENTAGE // Percentage of contribution per day
+  TIER_BASED       // Different rates for different time periods
+}
+
+// Add model for late fine rules
+model LateFineRule {
+  id                String            @id @default(auto()) @map("_id") @db.ObjectId
+  groupId           String            @db.ObjectId
+  group             Group             @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  
+  ruleType          LateFineRuleType
+  isEnabled         Boolean           @default(false)
+  
+  // For DAILY_FIXED and DAILY_PERCENTAGE
+  dailyAmount       Float?            // Fixed daily amount (for DAILY_FIXED)
+  dailyPercentage   Float?            // Daily percentage (for DAILY_PERCENTAGE)
+  
+  // For TIER_BASED
+  tierRules         LateFineRuleTier[]
+  
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  @@index([groupId])
+}
+
+// Model for tier-based late fine rules
+model LateFineRuleTier {
+  id                String        @id @default(auto()) @map("_id") @db.ObjectId
+  lateFineRuleId    String        @db.ObjectId
+  lateFineRule      LateFineRule  @relation(fields: [lateFineRuleId], references: [id], onDelete: Cascade)
+  
+  startDay          Int           // Start day (1-based)
+  endDay            Int           // End day (1-based) 
+  amount            Float         // Amount for this tier
+  isPercentage      Boolean       @default(false) // Whether amount is percentage or fixed
+  
+  createdAt         DateTime      @default(now())
+
+  @@index([lateFineRuleId])
+}
+
+// Add enum for contribution status
+enum ContributionStatus {
+  PENDING
+  PAID
+  OVERDUE
+  WAIVED
+}
+
+// Add enum for cash allocation type
+enum CashAllocationType {
+  BANK_TRANSFER
+  CASH_IN_HAND
+  CUSTOM_SPLIT
+}
+
+// Add model for tracking individual member contributions
+model MemberContribution {
+  id                        String                @id @default(auto()) @map("_id") @db.ObjectId
+  groupPeriodicRecordId     String                @db.ObjectId
+  groupPeriodicRecord       GroupPeriodicRecord   @relation(fields: [groupPeriodicRecordId], references: [id], onDelete: Cascade)
+  memberId                  String                @db.ObjectId
+  member                    Member                @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  
+  // Required amounts
+  compulsoryContributionDue Float                 // Required monthly/periodic contribution
+  loanInterestDue           Float?                // Required loan interest payment
+  minimumDueAmount          Float                 // Calculated minimum due (contribution + interest + fines)
+  
+  // Actual payments
+  compulsoryContributionPaid Float               @default(0)
+  loanInterestPaid          Float                @default(0)
+  lateFinePaid             Float                 @default(0)
+  totalPaid                Float                 @default(0)
+  
+  // Status and tracking
+  status                   ContributionStatus    @default(PENDING)
+  dueDate                  DateTime
+  paidDate                 DateTime?
+  daysLate                 Int                   @default(0)
+  lateFineAmount           Float                 @default(0)
+  
+  // Remaining amounts
+  remainingAmount          Float                 @default(0)
+  
+  // Cash allocation tracking (stored as JSON string)
+  cashAllocation           String?               // JSON string containing allocation details
+  
+  createdAt                DateTime              @default(now())
+  updatedAt                DateTime              @updatedAt
+
+  @@unique([groupPeriodicRecordId, memberId])
+  @@index([groupPeriodicRecordId])
+  @@index([memberId])
+  @@index([status])
+  @@index([dueDate])
+}
+
+// Add model for cash allocation tracking
+model CashAllocation {
+  id                    String              @id @default(auto()) @map("_id") @db.ObjectId
+  groupPeriodicRecordId String              @db.ObjectId
+  groupPeriodicRecord   GroupPeriodicRecord @relation(fields: [groupPeriodicRecordId], references: [id], onDelete: Cascade)
+  
+  allocationType        CashAllocationType
+  amountToBankTransfer  Float               @default(0)
+  amountToCashInHand    Float               @default(0)
+  customAllocationNote  String?             // For custom allocations
+  
+  totalAllocated        Float
+  isTransactionClosed   Boolean             @default(false)
+  transactionClosedAt   DateTime?
+  transactionClosedBy   String?             @db.ObjectId // User who closed it
+  
+  carryForwardAmount    Float               @default(0) // Amount carried to next period
+  
+  lastModifiedAt        DateTime            @default(now())
+  lastModifiedBy        String?             @db.ObjectId // User who last modified
+  
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  @@index([groupPeriodicRecordId])
+}
+
+// Add model for contribution reports
+model ContributionReport {
+  id                    String              @id @default(auto()) @map("_id") @db.ObjectId
+  groupPeriodicRecordId String              @db.ObjectId
+  groupPeriodicRecord   GroupPeriodicRecord @relation(fields: [groupPeriodicRecordId], references: [id], onDelete: Cascade)
+  
+  reportData            Json                // Store comprehensive report data
+  generatedAt           DateTime            @default(now())
+  generatedBy           String?             @db.ObjectId // User who generated it
+  
+  @@index([groupPeriodicRecordId])
+  @@index([generatedAt])
+}
+
+// User model for authentication
+model User {
+  id               String                @id @default(auto()) @map("_id") @db.ObjectId
+  name             String?
+  email            String?               // Temporarily removed @unique constraint
+  phone            String?               // Temporarily removed @unique constraint
+  emailVerified    DateTime?
+  phoneVerified    DateTime?
+  password         String?
+  role             UserRole              @default(MEMBER)
+  image            String?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  accounts         Account[]
+  sessions         Session[]
+  memberId         String?               @db.ObjectId // Kept non-unique
+  member           Member?               @relation("UserMemberRelation", fields: [memberId], references: [id])
+  membersCreated   Member[]              @relation("MemberCreator") // Added: Inverse relation
+  passwordResetTokens PasswordResetToken[] // Added: Relation to password reset tokens
+
+  // Pending leadership invitations initiated by this user
+  initiatedPendingLeaderships PendingLeadership[] @relation("PendingLeadershipsInitiatedByUser")
+}
+
+model Account {
+  id                String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId            String   @db.ObjectId
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?  @db.String
+  access_token      String?  @db.String
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?  @db.String
+  session_state     String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  sessionToken String   @unique
+  userId       String   @db.ObjectId
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Group {
+  id                   String                  @id @default(auto()) @map("_id") @db.ObjectId
+  groupId              String                  @unique // Custom unique ID (e.g., GRP-YYYYMM-XXX), generated in API
+  name                 String
+  address              String?
+  registrationNumber   String? // e.g., JSK registration or other government ID
+  organization         String? // e.g., JSK, Govt of Jharkhand, NGO, Other
+  leaderId             String?                 @db.ObjectId // ID of the Member who is the leader
+  leader               Member?                 @relation("GroupLeader", fields: [leaderId], references: [id]) // Relation to the leader Member
+  memberCount          Int? // Expected number of members (can change)
+  dateOfStarting       DateTime? // Date the group officially started
+  establishmentDate    DateTime? // Date the group was established (Estd.: 2010)
+  description          String? // Optional description
+  collectionFrequency  CollectionFrequency     @default(MONTHLY) // Added collection frequency
+  
+  // Collection schedule fields - required based on frequency
+  collectionDayOfMonth Int?                    @default(1) // For monthly/yearly: which day of month (1-31), defaults to 1st
+  collectionDayOfWeek  DayOfWeek?              // For weekly/fortnightly: which day of week
+  collectionWeekOfMonth Int?                   // For fortnightly: which week (1-4)
+  
+  bankAccountNumber    String? // Optional bank account number
+  bankName             String? // Optional bank name
+  cashInHand           Float?                  // Cash in hand at group creation
+  balanceInBank        Float?                  // Balance in bank at group creation  
+  monthlyContribution  Float?                  // Monthly contribution per member
+  interestRate         Float?                  // Annual interest rate percentage
+  createdAt            DateTime                @default(now()) // Date the record was created in the DB
+  updatedAt            DateTime                @updatedAt
+  memberships          MemberGroupMembership[] // Relation to the membership details
+  groupPeriodicRecords GroupPeriodicRecord[] // Renamed from monthlyRecords
+  loans                Loan[]                  @relation("GroupLoans")
+  bankTransactions     BankTransaction[]
+  lateFineRules        LateFineRule[]          // Relation to late fine rules
+  
+  // Relation to pending leadership invitations for this group
+  pendingLeaderships   PendingLeadership[]    @relation("GroupPendingInvitations")
+}
+
+model Member {
+  id                         String                      @id @default(auto()) @map("_id") @db.ObjectId
+  name                       String
+  email                      String?
+  phone                      String?
+  address                    String?
+  currentLoanAmount          Float?                      // Added: Current loan amount during import
+  createdAt                  DateTime                    @default(now())
+  updatedAt                  DateTime                    @updatedAt
+  ledGroups                  Group[]                     @relation("GroupLeader")
+  memberships                MemberGroupMembership[]
+  groupMemberPeriodicRecords GroupMemberPeriodicRecord[] // Renamed from monthlyRecords
+  loans                      Loan[]                      @relation("MemberLoans")
+  nextGenMembers             NextGenMember[]             @relation("PrimaryMemberNextGen")
+  users                      User[]                      @relation("UserMemberRelation") // Changed from: user User?
+  contributions              MemberContribution[]        // Relation to contribution tracking
+
+  createdByUserId String?    @db.ObjectId // Added: Foreign key to User
+  createdByUser   User?      @relation("MemberCreator", fields: [createdByUserId], references: [id], onDelete: NoAction, onUpdate: NoAction) // Added: Relation to User, and referential actions
+
+  // Relation to pending leadership invitations where this member is the proposed leader
+  pendingLeadershipInvitations PendingLeadership[] @relation("MemberProposedAsLeader")
+}
+
+model MemberGroupMembership {
+  id       String   @id @default(auto()) @map("_id") @db.ObjectId
+  memberId String   @db.ObjectId
+  groupId  String   @db.ObjectId
+  member   Member   @relation(fields: [memberId], references: [id])
+  group    Group    @relation(fields: [groupId], references: [id])
+  joinedAt DateTime @default(now()) // When the member was added *in the system*
+
+  // Current financial data fields
+  currentShareAmount Float? // Current share amount (calculated as totalGroupStanding / numberOfMembers)
+  currentLoanAmount  Float? // Current outstanding loan amount
+  initialInterest    Float? // Accrued interest at dateOfStarting (if applicable)
+  // Add other historical fields as needed
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([memberId, groupId]) // Ensure a member is only in a group once
+}
+
+// Model to store summary data for a specific period (meeting)
+model GroupPeriodicRecord {
+  id                   String   @id @default(auto()) @map("_id") @db.ObjectId
+  groupId              String   @db.ObjectId
+  group                Group    @relation(fields: [groupId], references: [id])
+  meetingDate          DateTime // Date of the meeting/record
+  recordSequenceNumber Int? // Sequential meeting number (e.g., 1, 2, 174)
+  membersPresent       Int? // Added field for number of members present
+  newMembersJoinedThisPeriod Int? // Number of new members who joined in this period
+
+  // --- Core Financials for the Period ---
+  totalCollectionThisPeriod Float? // Total collected this period (Compulsory Savings, Loan Repayments, Fines, New Deposits etc.)
+  standingAtStartOfPeriod   Float? // Group's total standing/balance at the beginning of this period
+  cashInBankAtEndOfPeriod   Float? // Cash in Bank Account at the end of this period
+  cashInHandAtEndOfPeriod   Float? // Cash in Hand at the end of this period
+  expensesThisPeriod        Float? // Expenses incurred by the group this period
+
+  // --- Overall Group Standing ---
+  totalGroupStandingAtEndOfPeriod Float? // Total SHG Standing/Net Worth at the end of this period
+
+  // --- Income Details for the Period ---
+  interestEarnedThisPeriod              Float? // Total interest earned from all loans this period
+  newContributionsThisPeriod            Float? // Total new savings/contributions collected this period
+  loanProcessingFeesCollectedThisPeriod Float? // Sum of loan processing fees collected this period
+  lateFinesCollectedThisPeriod          Float? // Sum of late fines collected this period
+  loanInterestRepaymentsThisPeriod      Float? // Sum of loan interest paid by members this period
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberRecords                  GroupMemberPeriodicRecord[] // Link to individual member data for this period
+  loansIssuedThisPeriod          Loan[]                      @relation("LoansIssuedInPeriod")
+  loanPaymentsReceivedThisPeriod LoanPayment[]               @relation("PaymentsInPeriod")
+  memberContributions            MemberContribution[]        // Track individual contributions
+  cashAllocations                CashAllocation[]            // Track cash allocation decisions
+  contributionReports            ContributionReport[]        // Generated reports for this period
+
+  @@unique([groupId, meetingDate]) // Ensure only one record per group per meeting date
+  @@unique([groupId, recordSequenceNumber]) // Ensure sequence numbers are unique per group
+  @@index([groupId])
+}
+
+// Model to store individual member activity for a specific period
+model GroupMemberPeriodicRecord {
+  id                    String              @id @default(auto()) @map("_id") @db.ObjectId
+  groupPeriodicRecordId String              @db.ObjectId
+  groupPeriodicRecord   GroupPeriodicRecord @relation(fields: [groupPeriodicRecordId], references: [id]) // Renamed
+  memberId              String              @db.ObjectId
+  member                Member              @relation(fields: [memberId], references: [id])
+
+  compulsoryContribution    Float? // Savings made by member in this period
+  loanRepaymentPrincipal    Float? // Loan principal paid this period by member
+  loanRepaymentInterestRate Float? // Loan interest rate (%) paid this period by member
+  lateFinePaid              Float? // Late fine paid by member in this period
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([groupPeriodicRecordId, memberId]) // Each member has one record per period
+  @@index([groupPeriodicRecordId])
+  @@index([memberId])
+}
+
+// Model to track individual loans
+model Loan {
+  id               String               @id @default(auto()) @map("_id") @db.ObjectId
+  groupId          String               @db.ObjectId
+  group            Group                @relation("GroupLoans", fields: [groupId], references: [id])
+  memberId         String               @db.ObjectId
+  member           Member               @relation("MemberLoans", fields: [memberId], references: [id])
+  issuedInRecordId String?              @db.ObjectId // Optional: Link to period record it was issued
+  issuedInRecord   GroupPeriodicRecord? @relation("LoansIssuedInPeriod", fields: [issuedInRecordId], references: [id]) // Renamed
+
+  loanType       LoanType
+  originalAmount Float
+  interestRate   Float // Store as decimal, e.g., 0.01 for 1%
+  dateIssued     DateTime
+  status         LoanStatus
+  currentBalance Float // Updated after each payment
+  grantorInfo    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  payments LoanPayment[]
+
+  @@index([groupId])
+  @@index([memberId])
+  @@index([status])
+}
+
+// Model to record individual loan payments
+model LoanPayment {
+  id             String              @id @default(auto()) @map("_id") @db.ObjectId
+  loanId         String              @db.ObjectId
+  loan           Loan                @relation(fields: [loanId], references: [id])
+  paidInRecordId String              @db.ObjectId // Link to the period record the payment was made
+  paidInRecord   GroupPeriodicRecord @relation("PaymentsInPeriod", fields: [paidInRecordId], references: [id]) // Renamed
+
+  paymentDate     DateTime
+  principalAmount Float // Amount applied to principal
+  interestAmount  Float // Amount applied to interest
+  lateFinePaid    Float? // Any late fine included in this payment transaction
+
+  createdAt DateTime @default(now())
+
+  @@index([loanId])
+  @@index([paidInRecordId]) // Renamed index field
+}
+
+// Model for Next Generation members
+model NextGenMember {
+  id               String            @id @default(auto()) @map("_id") @db.ObjectId
+  primaryMemberId  String            @db.ObjectId
+  primaryMember    Member            @relation("PrimaryMemberNextGen", fields: [primaryMemberId], references: [id]) // Link to the main member
+  nextGenName      String
+  contribution     Float? // Store monthly contribution or total? Assuming monthly for now.
+  contributionType ContributionType? // Added: Cash or Bank
+  // Add other relevant fields: start date, relationship?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([primaryMemberId])
+}
+
+// Enum for Contribution Type
+enum ContributionType {
+  SAVING
+  SHARE
+  LOAN_REPAYMENT
+  OTHER
+}
+
+// Model for Bank Transactions
+model BankTransaction {
+  id               String           @id @default(auto()) @map("_id") @db.ObjectId
+  groupId          String           @db.ObjectId // Link to the group's bank account context if needed
+  group            Group            @relation(fields: [groupId], references: [id])
+  transactionDate  DateTime
+  particulars      String
+  amount           Float // Positive for deposit, negative for withdrawal
+  remainingBalance Float // Balance after this transaction
+  transactionType  TransactionType? // Added: Type of transaction
+
+  createdAt DateTime @default(now())
+
+  @@index([groupId])
+  @@index([transactionDate])
+}
+
+// Enum for Transaction Type
+enum TransactionType {
+  DEPOSIT
+  WITHDRAWAL
+  INTEREST_CREDIT
+  BANK_CHARGE
+  LOAN_DISBURSEMENT
+  LOAN_REPAYMENT
+  OTHER
+}
+
+// Enum for Loan Type
+enum LoanType {
+  PERSONAL
+  EDUCATION
+  SOCIAL
+  MORTGAGE
+  GRANTOR
+  OTHER
+}
+
+// Enum for Loan Status
+enum LoanStatus {
+  ACTIVE
+  PAID
+  DEFAULTED
+}
+
+// New Enum for Pending Leadership Status
+enum PendingLeadershipStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  SUPERSEDED // If a new leader is proposed before the old one accepts/rejects
+  CANCELLED  // If the initiator cancels the request
+}
+
+// New Model for Pending Leadership Invitations
+model PendingLeadership {
+  id        String   @id @default(cuid()) @map("_id") // Added @map("_id")
+  
+  groupId   String
+  group     Group    @relation("GroupPendingInvitations", fields: [groupId], references: [id], onDelete: Cascade)
+  
+  memberId  String   // The Member ID of the proposed leader
+  member    Member   @relation("MemberProposedAsLeader", fields: [memberId], references: [id], onDelete: Cascade)
+  
+  initiatedByUserId String? // User ID of the person who initiated this request
+  initiatedByUser   User?    @relation("PendingLeadershipsInitiatedByUser", fields: [initiatedByUserId], references: [id], onDelete: SetNull) // SetNull if initiator's account is deleted
+
+  status    PendingLeadershipStatus @default(PENDING)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // A group should ideally have only one active PENDING invitation at a time.
+  // This can be enforced at the application level:
+  // before creating a new PENDING, mark existing PENDING for the same group as SUPERSEDED.
+  @@index([groupId])
+  @@index([memberId])
+  @@index([initiatedByUserId])
+  @@index([status])
+}
+
+// New model for password reset tokens
+model PasswordResetToken {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @db.ObjectId
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}

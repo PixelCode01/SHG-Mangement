@@ -1,0 +1,57 @@
+import { NextResponse } from "next/server";
+import { hash } from "bcrypt";
+import { prisma } from "@/app/lib/prisma";
+import { MongoClient } from "mongodb";
+
+export async function POST(req: Request) {
+  try {
+    const { name, email, password } = await req.json();
+
+    // Validate the data
+    if (!name || !email || !password) {
+      return NextResponse.json(
+        { message: "Missing required fields" },
+        { status: 400 }
+      );
+    }
+
+    // Check if user already exists
+    const existingUser = await prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (existingUser) {
+      return NextResponse.json(
+        { message: "User already exists" },
+        { status: 409 }
+      );
+    }
+
+    // Hash the password
+    const hashedPassword = await hash(password, 10);
+
+    // Use Prisma's raw query capability to directly insert the user
+    // This bypasses Prisma's constraint checks for memberId
+    const dbUser = await prisma.$queryRaw`
+      INSERT INTO "User" ("name", "email", "password", "role", "createdAt", "updatedAt")
+      VALUES (${name}, ${email}, ${hashedPassword}, 'MEMBER', ${new Date()}, ${new Date()})
+      RETURNING *
+    `;
+
+    const user = Array.isArray(dbUser) ? dbUser[0] : dbUser;
+
+    // Return the user without the password
+    const { password: _, ...userWithoutPassword } = user;
+    
+    return NextResponse.json(
+      { message: "User created successfully", user: userWithoutPassword },
+      { status: 201 }
+    );
+  } catch (error) {
+    console.error("Registration error:", error);
+    return NextResponse.json(
+      { message: "Something went wrong" },
+      { status: 500 }
+    );
+  }
+}

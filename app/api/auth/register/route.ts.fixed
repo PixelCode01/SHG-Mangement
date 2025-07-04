@@ -1,0 +1,66 @@
+import { NextResponse } from "next/server";
+import { hash } from "bcrypt";
+import { prisma } from "@/app/lib/prisma";
+import { PrismaClient } from "@prisma/client";
+
+// Create a new PrismaClient instance with logging enabled
+const debugPrisma = new PrismaClient({
+  log: ['query', 'info', 'warn', 'error'],
+});
+
+export async function POST(req: Request) {
+  try {
+    const { name, email, password } = await req.json();
+
+    // Validate the data
+    if (!name || !email || !password) {
+      return NextResponse.json(
+        { message: "Missing required fields" },
+        { status: 400 }
+      );
+    }
+
+    // Check if user already exists
+    const existingUser = await prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (existingUser) {
+      return NextResponse.json(
+        { message: "User already exists" },
+        { status: 409 }
+      );
+    }
+
+    // Hash the password
+    const hashedPassword = await hash(password, 10);
+
+    // Create the user with an explicit undefined memberId
+    // This approach helps avoid the unique constraint issue
+    const user = await debugPrisma.user.create({
+      data: {
+        name,
+        email,
+        password: hashedPassword,
+        role: "MEMBER",
+        // Explicitly set to undefined to avoid constraint issues
+        // MongoDB should ignore undefined fields entirely
+        memberId: undefined,
+      },
+    });
+
+    // Return the user without the password
+    const { password: _, ...userWithoutPassword } = user;
+    
+    return NextResponse.json(
+      { message: "User created successfully", user: userWithoutPassword },
+      { status: 201 }
+    );
+  } catch (error) {
+    console.error("Registration error:", error);
+    return NextResponse.json(
+      { message: `Registration failed: ${error instanceof Error ? error.message : 'Unknown error'}` },
+      { status: 500 }
+    );
+  }
+}

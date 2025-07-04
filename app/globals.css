@@ -1,0 +1,231 @@
+@import "tailwindcss";
+
+:root {
+  --primary: #0d6efd; /* Bootstrap Blue */
+  --primary-light: #4dabf7; /* Lighter shade */
+  --primary-dark: #0a58ca; /* Darker shade */
+  --secondary: #198754; /* Bootstrap Success Green */
+  --background: #f8f9fa; /* Very light gray, off-white */
+  --card-bg: #ffffff;    /* Pure white for cards */
+  --foreground: #212529; /* Bootstrap dark text, good contrast */
+  --muted: #6c757d;      /* Bootstrap muted text */
+  --border: #dee2e6;     /* Bootstrap default border */
+  --hover: #e9ecef;      /* Common light theme hover */
+}
+
+/* Apply dark theme variables when .dark class is present on html or :root */
+.dark:root {
+  --primary: #60a5fa; /* Updated */
+  --primary-light: #93c5fd; /* Updated */
+  --primary-dark: #3b82f6; /* Updated */
+  --secondary: #34d399; /* Updated */
+  --background: #0f172a; /* Updated */
+  --card-bg: #1e293b; /* Updated */
+  --foreground: #f8fafc; /* Updated */
+  --muted: #94a3b8; /* Updated */
+  --border: #334155; /* Updated */
+  --hover: #334155; /* Updated (can also be a dedicated darker hover like #273243) */
+}
+
+.dark .btn-secondary {
+  background-color: transparent; /* Updated */
+  color: var(--primary); /* Updated */
+  border: 1px solid var(--primary); /* Updated */
+}
+
+.dark .btn-secondary:hover {
+  background-color: var(--primary); /* Updated */
+  color: var(--background); /* Updated for contrast */
+}
+
+/* Dark Mode Form Element Styling */
+.dark input[type="text"],
+.dark input[type="email"],
+.dark input[type="password"],
+.dark input[type="number"],
+.dark input[type="search"],
+.dark input[type="tel"],
+.dark input[type="url"],
+.dark textarea,
+.dark select {
+  background-color: var(--card-bg); /* Dark background */
+  color: var(--foreground);       /* Light text */
+  border-color: var(--border);     /* Dark border for inputs not using dark:border-xxx */
+}
+
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: var(--muted); /* Muted color for dark mode */
+}
+
+.dark select {
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%2394a3b8' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e"); /* Updated stroke color */
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  overflow-x: hidden;
+}
+
+/* General Form Element Styling */
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="number"],
+input[type="search"],
+input[type="tel"],
+input[type="url"],
+textarea,
+select {
+  background-color: var(--card-bg);
+  color: var(--foreground);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 1; /* Ensure visibility in Firefox */
+}
+
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-repeat: no-repeat;
+  background-position: right 0.5rem center;
+  background-size: 1.5em 1.5em;
+}
+
+select {
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%2364748b' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e"); /* Updated stroke color */
+}
+
+/* Buttons */
+.btn-primary {
+  background-color: var(--primary);
+  color: white;
+  border-radius: 0.375rem;
+  font-weight: 500;
+  padding: 0.5rem 1rem;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-primary:hover {
+  background-color: var(--primary-dark);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.btn-primary:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.btn-secondary {
+  background-color: transparent; /* Updated */
+  color: var(--primary); /* Updated */
+  border: 1px solid var(--primary); /* Updated */
+  border-radius: 0.375rem;
+  font-weight: 500;
+  padding: 0.5rem 1rem;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-secondary:hover {
+  background-color: var(--primary); /* Updated */
+  color: white; /* Updated for better contrast on primary background */
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.btn-secondary:active {
+  transform: translateY(0);
+  box-shadow: none;
+}
+
+/* Card */
+.card {
+  background-color: var(--card-bg);
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  transition: all 0.2s ease;
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  border-color: var(--primary-light);
+}
+
+/* Table */
+table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+}
+
+th {
+  background-color: var(--hover);
+  font-weight: 600;
+  text-align: left;
+  padding: 0.75rem 1rem;
+  border-bottom: 2px solid var(--border);
+}
+
+td {
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--border);
+}
+
+tr:hover {
+  background-color: var(--hover);
+}
+
+/* Navigation */
+nav.sticky {
+  backdrop-filter: blur(8px);
+}
+
+/* Utility Classes */
+.text-gradient {
+  color: var(--primary);
+}
+
+@supports (background-clip: text) or (-webkit-background-clip: text) {
+  .text-gradient {
+    background-image: linear-gradient(to right, var(--primary), var(--secondary));
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+  }
+}
+
+.transition-all {
+  transition-property: all;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+
+/* Focus styles for better accessibility */
+a:focus-visible, 
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}

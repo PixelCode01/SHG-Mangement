@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>PDF Upload Test</title>
+</head>
+<body>
+    <h1>PDF Upload Test</h1>
+    
+    <form id="uploadForm" enctype="multipart/form-data">
+        <input type="file" id="pdfFile" accept=".pdf" required>
+        <button type="submit">Upload PDF</button>
+    </form>
+    
+    <div id="result"></div>
+    
+    <script>
+    document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        const fileInput = document.getElementById('pdfFile');
+        const resultDiv = document.getElementById('result');
+        
+        if (!fileInput.files[0]) {
+            resultDiv.innerHTML = '<p>Please select a PDF file</p>';
+            return;
+        }
+        
+        const formData = new FormData();
+        formData.append('pdf', fileInput.files[0]);
+        
+        try {
+            resultDiv.innerHTML = '<p>Uploading...</p>';
+            
+            const response = await fetch('/api/pdf-upload-v18', {
+                method: 'POST',
+                body: formData
+            });
+            
+            const result = await response.json();
+            
+            if (result.success && result.members) {
+                const totalLoans = result.members.reduce((sum, member) => {
+                    const loanAmount = parseFloat(member.loanAmount?.replace(/[₹,]/g, '') || '0');
+                    return sum + loanAmount;
+                }, 0);
+                
+                resultDiv.innerHTML = `
+                    <h2>✅ Success!</h2>
+                    <p><strong>Members Found:</strong> ${result.members.length}</p>
+                    <p><strong>Total Loan Amount:</strong> ₹${totalLoans.toLocaleString('en-IN')}</p>
+                    <h3>Sample Members:</h3>
+                    <ul>
+                        ${result.members.slice(0, 5).map(member => 
+                            `<li>${member.name} - ${member.loanAmount || 'No loan'}</li>`
+                        ).join('')}
+                    </ul>
+                `;
+            } else {
+                resultDiv.innerHTML = `<p>❌ Error: ${result.error}</p>`;
+            }
+        } catch (error) {
+            resultDiv.innerHTML = `<p>❌ Network Error: ${error.message}</p>`;
+        }
+    });
+    </script>
+</body>
+</html>
