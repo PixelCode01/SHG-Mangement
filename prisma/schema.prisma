@@ -39,45 +39,45 @@ enum DayOfWeek {
 
 // Add enum for late fine rule type
 enum LateFineRuleType {
-  DAILY_FIXED      // Fixed amount per day
+  DAILY_FIXED // Fixed amount per day
   DAILY_PERCENTAGE // Percentage of contribution per day
-  TIER_BASED       // Different rates for different time periods
+  TIER_BASED // Different rates for different time periods
 }
 
 // Add model for late fine rules
 model LateFineRule {
-  id                String            @id @default(auto()) @map("_id") @db.ObjectId
-  groupId           String            @db.ObjectId
-  group             Group             @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  
-  ruleType          LateFineRuleType
-  isEnabled         Boolean           @default(false)
-  
+  id      String @id @default(auto()) @map("_id") @db.ObjectId
+  groupId String @db.ObjectId
+  group   Group  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  ruleType  LateFineRuleType
+  isEnabled Boolean          @default(false)
+
   // For DAILY_FIXED and DAILY_PERCENTAGE
-  dailyAmount       Float?            // Fixed daily amount (for DAILY_FIXED)
-  dailyPercentage   Float?            // Daily percentage (for DAILY_PERCENTAGE)
-  
+  dailyAmount     Float? // Fixed daily amount (for DAILY_FIXED)
+  dailyPercentage Float? // Daily percentage (for DAILY_PERCENTAGE)
+
   // For TIER_BASED
-  tierRules         LateFineRuleTier[]
-  
-  createdAt         DateTime          @default(now())
-  updatedAt         DateTime          @updatedAt
+  tierRules LateFineRuleTier[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([groupId])
 }
 
 // Model for tier-based late fine rules
 model LateFineRuleTier {
-  id                String        @id @default(auto()) @map("_id") @db.ObjectId
-  lateFineRuleId    String        @db.ObjectId
-  lateFineRule      LateFineRule  @relation(fields: [lateFineRuleId], references: [id], onDelete: Cascade)
-  
-  startDay          Int           // Start day (1-based)
-  endDay            Int           // End day (1-based) 
-  amount            Float         // Amount for this tier
-  isPercentage      Boolean       @default(false) // Whether amount is percentage or fixed
-  
-  createdAt         DateTime      @default(now())
+  id             String       @id @default(auto()) @map("_id") @db.ObjectId
+  lateFineRuleId String       @db.ObjectId
+  lateFineRule   LateFineRule @relation(fields: [lateFineRuleId], references: [id], onDelete: Cascade)
+
+  startDay     Int // Start day (1-based)
+  endDay       Int // End day (1-based) 
+  amount       Float // Amount for this tier
+  isPercentage Boolean @default(false) // Whether amount is percentage or fixed
+
+  createdAt DateTime @default(now())
 
   @@index([lateFineRuleId])
 }
@@ -99,38 +99,42 @@ enum CashAllocationType {
 
 // Add model for tracking individual member contributions
 model MemberContribution {
-  id                        String                @id @default(auto()) @map("_id") @db.ObjectId
-  groupPeriodicRecordId     String                @db.ObjectId
-  groupPeriodicRecord       GroupPeriodicRecord   @relation(fields: [groupPeriodicRecordId], references: [id], onDelete: Cascade)
-  memberId                  String                @db.ObjectId
-  member                    Member                @relation(fields: [memberId], references: [id], onDelete: Cascade)
-  
+  id                    String              @id @default(auto()) @map("_id") @db.ObjectId
+  groupPeriodicRecordId String              @db.ObjectId
+  groupPeriodicRecord   GroupPeriodicRecord @relation(fields: [groupPeriodicRecordId], references: [id], onDelete: Cascade)
+  memberId              String              @db.ObjectId
+  member                Member              @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
   // Required amounts
-  compulsoryContributionDue Float                 // Required monthly/periodic contribution
-  loanInterestDue           Float?                // Required loan interest payment
-  minimumDueAmount          Float                 // Calculated minimum due (contribution + interest + fines)
-  
+  compulsoryContributionDue Float // Required monthly/periodic contribution
+  loanInterestDue           Float? // Required loan interest payment
+  loanInsuranceDue          Float? // Required loan insurance payment
+  groupSocialDue            Float? // Required group social payment
+  minimumDueAmount          Float // Calculated minimum due (contribution + interest + fines + insurance + social)
+
   // Actual payments
-  compulsoryContributionPaid Float               @default(0)
-  loanInterestPaid          Float                @default(0)
-  lateFinePaid             Float                 @default(0)
-  totalPaid                Float                 @default(0)
-  
+  compulsoryContributionPaid Float @default(0)
+  loanInterestPaid           Float @default(0)
+  lateFinePaid               Float @default(0)
+  loanInsurancePaid          Float @default(0) // Loan insurance payment
+  groupSocialPaid            Float @default(0) // Group social payment
+  totalPaid                  Float @default(0)
+
   // Status and tracking
-  status                   ContributionStatus    @default(PENDING)
-  dueDate                  DateTime
-  paidDate                 DateTime?
-  daysLate                 Int                   @default(0)
-  lateFineAmount           Float                 @default(0)
-  
+  status         ContributionStatus @default(PENDING)
+  dueDate        DateTime
+  paidDate       DateTime?
+  daysLate       Int                @default(0)
+  lateFineAmount Float              @default(0)
+
   // Remaining amounts
-  remainingAmount          Float                 @default(0)
-  
+  remainingAmount Float @default(0)
+
   // Cash allocation tracking (stored as JSON string)
-  cashAllocation           String?               // JSON string containing allocation details
-  
-  createdAt                DateTime              @default(now())
-  updatedAt                DateTime              @updatedAt
+  cashAllocation String? // JSON string containing allocation details
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([groupPeriodicRecordId, memberId])
   @@index([groupPeriodicRecordId])
@@ -144,24 +148,24 @@ model CashAllocation {
   id                    String              @id @default(auto()) @map("_id") @db.ObjectId
   groupPeriodicRecordId String              @db.ObjectId
   groupPeriodicRecord   GroupPeriodicRecord @relation(fields: [groupPeriodicRecordId], references: [id], onDelete: Cascade)
-  
-  allocationType        CashAllocationType
-  amountToBankTransfer  Float               @default(0)
-  amountToCashInHand    Float               @default(0)
-  customAllocationNote  String?             // For custom allocations
-  
-  totalAllocated        Float
-  isTransactionClosed   Boolean             @default(false)
-  transactionClosedAt   DateTime?
-  transactionClosedBy   String?             @db.ObjectId // User who closed it
-  
-  carryForwardAmount    Float               @default(0) // Amount carried to next period
-  
-  lastModifiedAt        DateTime            @default(now())
-  lastModifiedBy        String?             @db.ObjectId // User who last modified
-  
-  createdAt             DateTime            @default(now())
-  updatedAt             DateTime            @updatedAt
+
+  allocationType       CashAllocationType
+  amountToBankTransfer Float              @default(0)
+  amountToCashInHand   Float              @default(0)
+  customAllocationNote String? // For custom allocations
+
+  totalAllocated      Float
+  isTransactionClosed Boolean   @default(false)
+  transactionClosedAt DateTime?
+  transactionClosedBy String?   @db.ObjectId // User who closed it
+
+  carryForwardAmount Float @default(0) // Amount carried to next period
+
+  lastModifiedAt DateTime @default(now())
+  lastModifiedBy String?  @db.ObjectId // User who last modified
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([groupPeriodicRecordId])
 }
@@ -171,33 +175,33 @@ model ContributionReport {
   id                    String              @id @default(auto()) @map("_id") @db.ObjectId
   groupPeriodicRecordId String              @db.ObjectId
   groupPeriodicRecord   GroupPeriodicRecord @relation(fields: [groupPeriodicRecordId], references: [id], onDelete: Cascade)
-  
-  reportData            Json                // Store comprehensive report data
-  generatedAt           DateTime            @default(now())
-  generatedBy           String?             @db.ObjectId // User who generated it
-  
+
+  reportData  Json // Store comprehensive report data
+  generatedAt DateTime @default(now())
+  generatedBy String?  @db.ObjectId // User who generated it
+
   @@index([groupPeriodicRecordId])
   @@index([generatedAt])
 }
 
 // User model for authentication
 model User {
-  id               String                @id @default(auto()) @map("_id") @db.ObjectId
-  name             String?
-  email            String?               // Temporarily removed @unique constraint
-  phone            String?               // Temporarily removed @unique constraint
-  emailVerified    DateTime?
-  phoneVerified    DateTime?
-  password         String?
-  role             UserRole              @default(MEMBER)
-  image            String?
-  createdAt        DateTime              @default(now())
-  updatedAt        DateTime              @updatedAt
-  accounts         Account[]
-  sessions         Session[]
-  memberId         String?               @db.ObjectId // Kept non-unique
-  member           Member?               @relation("UserMemberRelation", fields: [memberId], references: [id])
-  membersCreated   Member[]              @relation("MemberCreator") // Added: Inverse relation
+  id                  String               @id @default(auto()) @map("_id") @db.ObjectId
+  name                String?
+  email               String? // Temporarily removed @unique constraint
+  phone               String? // Temporarily removed @unique constraint
+  emailVerified       DateTime?
+  phoneVerified       DateTime?
+  password            String?
+  role                UserRole             @default(MEMBER)
+  image               String?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  accounts            Account[]
+  sessions            Session[]
+  memberId            String?              @db.ObjectId // Kept non-unique
+  member              Member?              @relation("UserMemberRelation", fields: [memberId], references: [id])
+  membersCreated      Member[]             @relation("MemberCreator") // Added: Inverse relation
   passwordResetTokens PasswordResetToken[] // Added: Relation to password reset tokens
 
   // Pending leadership invitations initiated by this user
@@ -243,41 +247,50 @@ model VerificationToken {
 }
 
 model Group {
-  id                   String                  @id @default(auto()) @map("_id") @db.ObjectId
-  groupId              String                  @unique // Custom unique ID (e.g., GRP-YYYYMM-XXX), generated in API
-  name                 String
-  address              String?
-  registrationNumber   String? // e.g., JSK registration or other government ID
-  organization         String? // e.g., JSK, Govt of Jharkhand, NGO, Other
-  leaderId             String?                 @db.ObjectId // ID of the Member who is the leader
-  leader               Member?                 @relation("GroupLeader", fields: [leaderId], references: [id]) // Relation to the leader Member
-  memberCount          Int? // Expected number of members (can change)
-  dateOfStarting       DateTime? // Date the group officially started
-  establishmentDate    DateTime? // Date the group was established (Estd.: 2010)
-  description          String? // Optional description
-  collectionFrequency  CollectionFrequency     @default(MONTHLY) // Added collection frequency
-  
+  id                  String              @id @default(auto()) @map("_id") @db.ObjectId
+  groupId             String              @unique // Custom unique ID (e.g., GRP-YYYYMM-XXX), generated in API
+  name                String
+  address             String?
+  registrationNumber  String? // e.g., JSK registration or other government ID
+  organization        String? // e.g., JSK, Govt of Jharkhand, NGO, Other
+  leaderId            String?             @db.ObjectId // ID of the Member who is the leader
+  leader              Member?             @relation("GroupLeader", fields: [leaderId], references: [id]) // Relation to the leader Member
+  memberCount         Int? // Expected number of members (can change)
+  dateOfStarting      DateTime? // Date the group officially started
+  establishmentDate   DateTime? // Date the group was established (Estd.: 2010)
+  description         String? // Optional description
+  collectionFrequency CollectionFrequency @default(MONTHLY) // Added collection frequency
+
   // Collection schedule fields - required based on frequency
-  collectionDayOfMonth Int?                    @default(1) // For monthly/yearly: which day of month (1-31), defaults to 1st
-  collectionDayOfWeek  DayOfWeek?              // For weekly/fortnightly: which day of week
-  collectionWeekOfMonth Int?                   // For fortnightly: which week (1-4)
-  
-  bankAccountNumber    String? // Optional bank account number
-  bankName             String? // Optional bank name
-  cashInHand           Float?                  // Cash in hand at group creation
-  balanceInBank        Float?                  // Balance in bank at group creation  
-  monthlyContribution  Float?                  // Monthly contribution per member
-  interestRate         Float?                  // Annual interest rate percentage
+  collectionDayOfMonth  Int?       @default(1) // For monthly/yearly: which day of month (1-31), defaults to 1st
+  collectionDayOfWeek   DayOfWeek? // For weekly/fortnightly: which day of week
+  collectionWeekOfMonth Int? // For fortnightly: which week (1-4)
+
+  bankAccountNumber   String? // Optional bank account number
+  bankName            String? // Optional bank name
+  cashInHand          Float? // Cash in hand at group creation
+  balanceInBank       Float? // Balance in bank at group creation  
+  monthlyContribution Float? // Monthly contribution per member
+  interestRate        Float? // Annual interest rate percentage
+
+  // Loan Insurance Settings
+  loanInsuranceEnabled Boolean @default(false) // Whether loan insurance is enabled
+  loanInsurancePercent Float? // Percentage of loan amount for insurance (e.g., 0.2 for 0.2%)
+
+  // Group Social Settings
+  groupSocialEnabled Boolean @default(false) // Whether group social is enabled
+  groupSocialAmountPerFamilyMember Float? // Amount per family member for group social (e.g., ₹10 per family member)
+
   createdAt            DateTime                @default(now()) // Date the record was created in the DB
   updatedAt            DateTime                @updatedAt
   memberships          MemberGroupMembership[] // Relation to the membership details
   groupPeriodicRecords GroupPeriodicRecord[] // Renamed from monthlyRecords
   loans                Loan[]                  @relation("GroupLoans")
   bankTransactions     BankTransaction[]
-  lateFineRules        LateFineRule[]          // Relation to late fine rules
-  
+  lateFineRules        LateFineRule[] // Relation to late fine rules
+
   // Relation to pending leadership invitations for this group
-  pendingLeaderships   PendingLeadership[]    @relation("GroupPendingInvitations")
+  pendingLeaderships PendingLeadership[] @relation("GroupPendingInvitations")
 }
 
 model Member {
@@ -286,7 +299,8 @@ model Member {
   email                      String?
   phone                      String?
   address                    String?
-  currentLoanAmount          Float?                      // Added: Current loan amount during import
+  currentLoanAmount          Float? // Added: Current loan amount during import
+  familyMembersCount         Int? // Number of family members for group social calculation
   createdAt                  DateTime                    @default(now())
   updatedAt                  DateTime                    @updatedAt
   ledGroups                  Group[]                     @relation("GroupLeader")
@@ -295,10 +309,10 @@ model Member {
   loans                      Loan[]                      @relation("MemberLoans")
   nextGenMembers             NextGenMember[]             @relation("PrimaryMemberNextGen")
   users                      User[]                      @relation("UserMemberRelation") // Changed from: user User?
-  contributions              MemberContribution[]        // Relation to contribution tracking
+  contributions              MemberContribution[] // Relation to contribution tracking
 
-  createdByUserId String?    @db.ObjectId // Added: Foreign key to User
-  createdByUser   User?      @relation("MemberCreator", fields: [createdByUserId], references: [id], onDelete: NoAction, onUpdate: NoAction) // Added: Relation to User, and referential actions
+  createdByUserId String? @db.ObjectId // Added: Foreign key to User
+  createdByUser   User?   @relation("MemberCreator", fields: [createdByUserId], references: [id], onDelete: NoAction, onUpdate: NoAction) // Added: Relation to User, and referential actions
 
   // Relation to pending leadership invitations where this member is the proposed leader
   pendingLeadershipInvitations PendingLeadership[] @relation("MemberProposedAsLeader")
@@ -326,12 +340,12 @@ model MemberGroupMembership {
 
 // Model to store summary data for a specific period (meeting)
 model GroupPeriodicRecord {
-  id                   String   @id @default(auto()) @map("_id") @db.ObjectId
-  groupId              String   @db.ObjectId
-  group                Group    @relation(fields: [groupId], references: [id])
-  meetingDate          DateTime // Date of the meeting/record
-  recordSequenceNumber Int? // Sequential meeting number (e.g., 1, 2, 174)
-  membersPresent       Int? // Added field for number of members present
+  id                         String   @id @default(auto()) @map("_id") @db.ObjectId
+  groupId                    String   @db.ObjectId
+  group                      Group    @relation(fields: [groupId], references: [id])
+  meetingDate                DateTime // Date of the meeting/record
+  recordSequenceNumber       Int? // Sequential meeting number (e.g., 1, 2, 174)
+  membersPresent             Int? // Added field for number of members present
   newMembersJoinedThisPeriod Int? // Number of new members who joined in this period
 
   // --- Core Financials for the Period ---
@@ -357,9 +371,9 @@ model GroupPeriodicRecord {
   memberRecords                  GroupMemberPeriodicRecord[] // Link to individual member data for this period
   loansIssuedThisPeriod          Loan[]                      @relation("LoansIssuedInPeriod")
   loanPaymentsReceivedThisPeriod LoanPayment[]               @relation("PaymentsInPeriod")
-  memberContributions            MemberContribution[]        // Track individual contributions
-  cashAllocations                CashAllocation[]            // Track cash allocation decisions
-  contributionReports            ContributionReport[]        // Generated reports for this period
+  memberContributions            MemberContribution[] // Track individual contributions
+  cashAllocations                CashAllocation[] // Track cash allocation decisions
+  contributionReports            ContributionReport[] // Generated reports for this period
 
   @@unique([groupId, meetingDate]) // Ensure only one record per group per meeting date
   @@unique([groupId, recordSequenceNumber]) // Ensure sequence numbers are unique per group
@@ -509,24 +523,24 @@ enum PendingLeadershipStatus {
   ACCEPTED
   REJECTED
   SUPERSEDED // If a new leader is proposed before the old one accepts/rejects
-  CANCELLED  // If the initiator cancels the request
+  CANCELLED // If the initiator cancels the request
 }
 
 // New Model for Pending Leadership Invitations
 model PendingLeadership {
-  id        String   @id @default(cuid()) @map("_id") // Added @map("_id")
-  
-  groupId   String
-  group     Group    @relation("GroupPendingInvitations", fields: [groupId], references: [id], onDelete: Cascade)
-  
-  memberId  String   // The Member ID of the proposed leader
-  member    Member   @relation("MemberProposedAsLeader", fields: [memberId], references: [id], onDelete: Cascade)
-  
-  initiatedByUserId String? // User ID of the person who initiated this request
-  initiatedByUser   User?    @relation("PendingLeadershipsInitiatedByUser", fields: [initiatedByUserId], references: [id], onDelete: SetNull) // SetNull if initiator's account is deleted
+  id String @id @default(cuid()) @map("_id") // Added @map("_id")
 
-  status    PendingLeadershipStatus @default(PENDING)
-  
+  groupId String
+  group   Group  @relation("GroupPendingInvitations", fields: [groupId], references: [id], onDelete: Cascade)
+
+  memberId String // The Member ID of the proposed leader
+  member   Member @relation("MemberProposedAsLeader", fields: [memberId], references: [id], onDelete: Cascade)
+
+  initiatedByUserId String? // User ID of the person who initiated this request
+  initiatedByUser   User?   @relation("PendingLeadershipsInitiatedByUser", fields: [initiatedByUserId], references: [id], onDelete: SetNull) // SetNull if initiator's account is deleted
+
+  status PendingLeadershipStatus @default(PENDING)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

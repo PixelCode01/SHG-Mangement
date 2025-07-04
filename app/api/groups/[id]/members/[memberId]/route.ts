@@ -7,6 +7,7 @@ const updateMembershipSchema = z.object({
   currentShareAmount: z.number().nonnegative().optional().nullable(),
   currentLoanAmount: z.number().nonnegative().optional().nullable(),
   initialInterest: z.number().nonnegative().optional().nullable(),
+  familyMembersCount: z.number().int().positive().optional().nullable(),
 });
 
 // DELETE /api/groups/[id]/members/[memberId] - Remove a member from a group
@@ -86,31 +87,53 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
         return NextResponse.json({ message: 'No update data provided' }, { status: 200 });
     }
 
-    // Create properly typed update data
-    const updateData: Record<string, unknown> = {};
+    // Create properly typed update data for membership
+    const membershipUpdateData: Record<string, unknown> = {};
+    const memberUpdateData: Record<string, unknown> = {};
     
     if (dataToUpdate.currentShareAmount !== undefined) {
-      updateData.currentShareAmount = dataToUpdate.currentShareAmount;
+      membershipUpdateData.currentShareAmount = dataToUpdate.currentShareAmount;
     }
     if (dataToUpdate.currentLoanAmount !== undefined) {
-      updateData.currentLoanAmount = dataToUpdate.currentLoanAmount;
+      membershipUpdateData.currentLoanAmount = dataToUpdate.currentLoanAmount;
     }
     if (dataToUpdate.initialInterest !== undefined) {
-      updateData.initialInterest = dataToUpdate.initialInterest;
+      membershipUpdateData.initialInterest = dataToUpdate.initialInterest;
+    }
+    if (dataToUpdate.familyMembersCount !== undefined) {
+      memberUpdateData.familyMembersCount = dataToUpdate.familyMembersCount;
     }
 
-    // Perform the update on the MemberGroupMembership record
-    const updatedMembership = await prisma.memberGroupMembership.update({
-      where: {
-        memberId_groupId: { // Use the compound unique key
-          memberId: memberId,
-          groupId: groupId,
-        },
-      },
-      data: updateData,
+    // Use a transaction to update both membership and member if needed
+    const result = await prisma.$transaction(async (tx) => {
+      let updatedMembership = null;
+      let updatedMember = null;
+
+      // Update membership data if there's any
+      if (Object.keys(membershipUpdateData).length > 0) {
+        updatedMembership = await tx.memberGroupMembership.update({
+          where: {
+            memberId_groupId: { // Use the compound unique key
+              memberId: memberId,
+              groupId: groupId,
+            },
+          },
+          data: membershipUpdateData,
+        });
+      }
+
+      // Update member data if there's any
+      if (Object.keys(memberUpdateData).length > 0) {
+        updatedMember = await tx.member.update({
+          where: { id: memberId },
+          data: memberUpdateData,
+        });
+      }
+
+      return { membership: updatedMembership, member: updatedMember };
     });
 
-    return NextResponse.json(updatedMembership);
+    return NextResponse.json(result);
 
   } catch (error) {
     const typedError = error as Error & { code?: string };

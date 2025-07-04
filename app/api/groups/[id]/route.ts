@@ -55,6 +55,15 @@ const updateGroupSchema = z.object({
       isPercentage: z.boolean()
     })).optional()
   }).optional(),
+  
+  // Loan Insurance settings
+  loanInsuranceEnabled: z.boolean().optional(),
+  loanInsurancePercent: z.number().nonnegative().max(100).optional().nullable(),
+  
+  // Group Social settings
+  groupSocialEnabled: z.boolean().optional(),
+  groupSocialAmountPerFamilyMember: z.number().nonnegative().optional().nullable(),
+  
   // Note: Member list updates are handled by separate endpoints (/api/groups/[id]/members)
 });
 
@@ -327,6 +336,27 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
           // Skip fields that need special handling
           if (key === 'leaderId' || key === 'lateFineRule' || key === 'isLateFineEnabled') {
             return; // Skip these fields - they're handled separately
+          }
+          
+          // Handle loan insurance and group social fields
+          if (key === 'loanInsuranceEnabled') {
+            updateData.loanInsuranceEnabled = Boolean(value);
+            return;
+          }
+          
+          if (key === 'loanInsurancePercent') {
+            updateData.loanInsurancePercent = value;
+            return;
+          }
+          
+          if (key === 'groupSocialEnabled') {
+            updateData.groupSocialEnabled = Boolean(value);
+            return;
+          }
+          
+          if (key === 'groupSocialAmountPerFamilyMember') {
+            updateData.groupSocialAmountPerFamilyMember = value;
+            return;
           }
           
           if (key === 'dateOfStarting' && typeof value === 'string') {

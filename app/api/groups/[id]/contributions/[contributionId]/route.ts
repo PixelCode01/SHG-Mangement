@@ -24,13 +24,15 @@ export async function PATCH(
       compulsoryContributionPaid,
       loanInterestPaid,
       lateFinePaid,
+      loanInsurancePaid,
+      groupSocialPaid,
       totalPaid: providedTotalPaid,
       cashAllocation,
       status
     } = body;
 
     // Calculate total paid if not provided
-    const calculatedTotalPaid = roundToTwoDecimals(providedTotalPaid || ((compulsoryContributionPaid || 0) + (loanInterestPaid || 0) + (lateFinePaid || 0)));
+    const calculatedTotalPaid = roundToTwoDecimals(providedTotalPaid || ((compulsoryContributionPaid || 0) + (loanInterestPaid || 0) + (lateFinePaid || 0) + (loanInsurancePaid || 0) + (groupSocialPaid || 0)));
 
     // Get the current contribution to calculate remaining amount
     const currentContribution = await prisma.memberContribution.findUnique({
@@ -51,6 +53,8 @@ export async function PATCH(
         compulsoryContributionPaid: roundToTwoDecimals(compulsoryContributionPaid || currentContribution.compulsoryContributionPaid),
         loanInterestPaid: roundToTwoDecimals(loanInterestPaid || currentContribution.loanInterestPaid),
         lateFinePaid: roundToTwoDecimals(lateFinePaid || currentContribution.lateFinePaid),
+        loanInsurancePaid: roundToTwoDecimals(loanInsurancePaid || currentContribution.loanInsurancePaid),
+        groupSocialPaid: roundToTwoDecimals(groupSocialPaid || currentContribution.groupSocialPaid),
         totalPaid: calculatedTotalPaid,
         remainingAmount,
         status: status || (remainingAmount === 0 ? 'PAID' : 'PENDING'),

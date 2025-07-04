@@ -27,6 +27,7 @@ interface GroupMember {
   currentLoanAmount?: number;
   currentLoanBalance?: number;
   initialInterest?: number;
+  familyMembersCount?: number;
 }
 
 interface GroupData {
@@ -64,6 +65,15 @@ interface GroupData {
       isPercentage: boolean;
     }[];
   }[];
+  
+  // Loan Insurance settings
+  loanInsuranceEnabled?: boolean;
+  loanInsurancePercent?: number;
+  
+  // Group Social settings
+  groupSocialEnabled?: boolean;
+  groupSocialAmountPerFamilyMember?: number;
+  
   members: GroupMember[];
   userPermissions: {
     canEdit: boolean;
@@ -85,12 +95,16 @@ interface ContributionRecord {
   // Required amounts
   compulsoryContributionDue: number;
   loanInterestDue?: number;
+  loanInsuranceDue?: number;
+  groupSocialDue?: number;
   minimumDueAmount: number;
   
   // Actual payments
   compulsoryContributionPaid: number;
   loanInterestPaid: number;
   lateFinePaid: number;
+  loanInsurancePaid: number;
+  groupSocialPaid: number;
   totalPaid: number;
   
   // Status and tracking
@@ -124,6 +138,9 @@ interface MemberContributionStatus {
   remainingAmount: number;
   status: 'PENDING' | 'PAID' | 'PARTIAL' | 'OVERDUE';
   lastPaymentDate?: string;
+  // New fields for loan insurance and group social
+  loanInsuranceAmount?: number;
+  groupSocialAmount?: number;
 }
 
 export default function ContributionTrackingPage() {
@@ -223,6 +240,8 @@ export default function ContributionTrackingPage() {
     interestPaid: number;
     loanRepayment: number;
     lateFinePaid: number;
+    loanInsurancePaid: number;
+    groupSocialPaid: number;
     remainingLoan: number;
   }>>({});
 
@@ -739,6 +758,16 @@ export default function ContributionTrackingPage() {
         groupData.collectionFrequency || 'MONTHLY'
       ));
       
+      // Calculate loan insurance amount (only if member has a loan and feature is enabled)
+      const loanInsuranceAmount = groupData.loanInsuranceEnabled && currentLoanBalance > 0 
+        ? roundToTwoDecimals(currentLoanBalance * (groupData.loanInsurancePercent || 0) / 100)
+        : 0;
+      
+      // Calculate group social amount (family-based if feature is enabled)
+      const groupSocialAmount = groupData.groupSocialEnabled 
+        ? roundToTwoDecimals((groupData.groupSocialAmountPerFamilyMember || 0) * (member.familyMembersCount || 1))
+        : 0;
+      
       // Always calculate days late and late fine using frontend logic
       // Backend calculation is not reliable for late fines currently
       let daysLate = 0;
@@ -750,7 +779,7 @@ export default function ContributionTrackingPage() {
       // Calculate late fine using frontend calculation (now fixed)
       lateFineAmount = calculateLateFine(groupData, daysLate, expectedContribution);
       
-      const totalExpected = roundToTwoDecimals(expectedContribution + expectedInterest + lateFineAmount);
+      const totalExpected = roundToTwoDecimals(expectedContribution + expectedInterest + lateFineAmount + loanInsuranceAmount + groupSocialAmount);
       
       // Use actual payment data from MemberContribution records if available
       const actualContribution = actualContributions[member.id];
@@ -801,6 +830,8 @@ export default function ContributionTrackingPage() {
         remainingAmount,
         status,
         lastPaymentDate,
+        loanInsuranceAmount,
+        groupSocialAmount,
       } as MemberContributionStatus;
     });
   };
@@ -809,7 +840,9 @@ export default function ContributionTrackingPage() {
   const updateCashBankAllocation = (memberId: string, currentCollection: any) => {
     const totalPaid = (currentCollection.compulsoryContribution || 0) + 
                      (currentCollection.interestPaid || 0) + 
-                     (currentCollection.lateFinePaid || 0);
+                     (currentCollection.lateFinePaid || 0) +
+                     (currentCollection.loanInsurancePaid || 0) +
+                     (currentCollection.groupSocialPaid || 0);
     
     if (totalPaid > 0) {
       // Auto-distribute cash vs bank (default 30% cash, 70% bank)
@@ -838,6 +871,8 @@ export default function ContributionTrackingPage() {
     interestPaid: number;
     loanRepayment: number;
     lateFinePaid: number;
+    loanInsurancePaid: number;
+    groupSocialPaid: number;
     remainingLoan: number;
   }) => {
     setSavingPayment(memberId);
@@ -895,7 +930,11 @@ export default function ContributionTrackingPage() {
         interestToCashInHand: collection.interestPaid * (collection.cashAmount / totalAmount),
         interestToCashInBank: collection.interestPaid * (collection.bankAmount / totalAmount),
         lateFineToCashInHand: (collection.lateFinePaid || 0) * (collection.cashAmount / totalAmount),
-        lateFineToCashInBank: (collection.lateFinePaid || 0) * (collection.bankAmount / totalAmount)
+        lateFineToCashInBank: (collection.lateFinePaid || 0) * (collection.bankAmount / totalAmount),
+        loanInsuranceToCashInHand: (collection.loanInsurancePaid || 0) * (collection.cashAmount / totalAmount),
+        loanInsuranceToCashInBank: (collection.loanInsurancePaid || 0) * (collection.bankAmount / totalAmount),
+        groupSocialToCashInHand: (collection.groupSocialPaid || 0) * (collection.cashAmount / totalAmount),
+        groupSocialToCashInBank: (collection.groupSocialPaid || 0) * (collection.bankAmount / totalAmount)
       };
 
       // Update the contribution via API
@@ -906,7 +945,9 @@ export default function ContributionTrackingPage() {
           compulsoryContributionPaid: collection.compulsoryContribution,
           loanInterestPaid: collection.interestPaid,
           lateFinePaid: collection.lateFinePaid || 0,
-          totalPaid: collection.compulsoryContribution + collection.interestPaid + (collection.lateFinePaid || 0),
+          loanInsurancePaid: collection.loanInsurancePaid || 0,
+          groupSocialPaid: collection.groupSocialPaid || 0,
+          totalPaid: collection.compulsoryContribution + collection.interestPaid + (collection.lateFinePaid || 0) + (collection.loanInsurancePaid || 0) + (collection.groupSocialPaid || 0),
           cashAllocation: cashAllocation
         })
       });
@@ -1234,7 +1275,7 @@ export default function ContributionTrackingPage() {
     setShowReportModal(true);
   };
 
-  // Function to generate CSV report
+  // Function to generate CSV report with loan insurance and group social support
   const generateCSVReport = () => {
     if (!group) return;
     
@@ -1264,7 +1305,7 @@ export default function ContributionTrackingPage() {
         return sum;
       }, 0);
 
-      // Create report data with cash allocation breakdown
+      // Create report data with cash allocation breakdown INCLUDING loan insurance and group social
       const reportData = memberContributions.map(member => {
         // Parse cash allocation if it exists
         let cashInHand = 0;
@@ -1285,6 +1326,8 @@ export default function ContributionTrackingPage() {
           'Member Name': member.memberName,
           'Expected Contribution': member.expectedContribution,
           'Expected Interest': member.expectedInterest,
+          'Loan Insurance': member.loanInsuranceAmount || 0,
+          'Group Social': member.groupSocialAmount || 0,
           'Late Fine': member.lateFineAmount || 0,
           'Days Late': member.daysLate || 0,
           'Total Expected': member.totalExpected,
@@ -1302,11 +1345,13 @@ export default function ContributionTrackingPage() {
       // Calculate totals for summary
       const totalLoanAmounts = memberContributions.reduce((sum, c) => sum + (c.currentLoanBalance || 0), 0);
 
-      // Add summary row with cash allocation totals
+      // Add summary row with cash allocation totals INCLUDING loan insurance and group social
       const summaryRow = {
         'Member Name': 'TOTAL SUMMARY',
         'Expected Contribution': memberContributions.reduce((sum, c) => sum + c.expectedContribution, 0),
         'Expected Interest': memberContributions.reduce((sum, c) => sum + c.expectedInterest, 0),
+        'Loan Insurance': memberContributions.reduce((sum, c) => sum + (c.loanInsuranceAmount || 0), 0),
+        'Group Social': memberContributions.reduce((sum, c) => sum + (c.groupSocialAmount || 0), 0),
         'Late Fine': memberContributions.reduce((sum, c) => sum + (c.lateFineAmount || 0), 0),
         'Days Late': '---',
         'Total Expected': memberContributions.reduce((sum, c) => sum + c.totalExpected, 0),
@@ -1323,6 +1368,8 @@ export default function ContributionTrackingPage() {
       const totalExpected = memberContributions.reduce((sum, c) => sum + c.totalExpected, 0);
       const totalCollected = memberContributions.reduce((sum, c) => sum + c.paidAmount, 0);
       const totalLateFines = memberContributions.reduce((sum, c) => sum + (c.lateFineAmount || 0), 0);
+      const totalLoanInsurance = memberContributions.reduce((sum, c) => sum + (c.loanInsuranceAmount || 0), 0);
+      const totalGroupSocial = memberContributions.reduce((sum, c) => sum + (c.groupSocialAmount || 0), 0);
       const membersWithLateFines = memberContributions.filter(c => (c.lateFineAmount || 0) > 0).length;
       const membersOverdue = memberContributions.filter(c => (c.daysLate || 0) > 0).length;
       
@@ -1331,15 +1378,16 @@ export default function ContributionTrackingPage() {
       const groupStanding = totalCollected + (group.cashInHand || 0) + (group.balanceInBank || 0) + totalLoanAmounts;
       const sharePerMember = group.memberCount > 0 ? groupStanding / group.memberCount : 0;
 
-      // Create enhanced CSV content with better headers and summary section
+      // Create enhanced CSV content with better headers and summary section INCLUDING loan insurance and group social
       const csvContent = [
         // Title
         ['CONTRIBUTION REPORT'],
         [''], // Empty row
-        // Header info
+        // Header info INCLUDING group social and loan insurance settings
         [`Group:,${group.name},,Monthly Contribution:,₹${group.monthlyContribution?.toLocaleString()}`],
         [`Report Date:,${new Date().toLocaleDateString()},,Interest Rate:,${group.interestRate || 0}%`],
-        [`Collection Frequency:,${group.collectionFrequency || 'Monthly'}`],
+        [`Collection Frequency:,${group.collectionFrequency || 'Monthly'},,Loan Insurance:,${group.loanInsuranceEnabled ? `Enabled (${group.loanInsurancePercent || 0}%)` : 'Disabled'}`],
+        [`Group Social:,${group.groupSocialEnabled ? `Enabled (₹${group.groupSocialAmountPerFamilyMember || 0} per family member)` : 'Disabled'},,Total Members:,${memberContributions.length}`],
         [''], // Empty row for spacing
         // Column headers
         Object.keys(reportData[0] || {}),
@@ -1359,6 +1407,17 @@ export default function ContributionTrackingPage() {
         ['Late Fine Details:,,,,'],
         [`Total Late Fines:,₹${totalLateFines.toLocaleString()},Members with Late Fines:,${membersWithLateFines}/${memberContributions.length},Members Overdue:,${membersOverdue}/${memberContributions.length}`],
         [''], // Empty row
+        // Group Social and Loan Insurance Details (if enabled)
+        ...(group.groupSocialEnabled || group.loanInsuranceEnabled ? [
+          ['Additional Features Summary:,,,,'],
+          ...(group.groupSocialEnabled ? [
+            [`Group Social:,Enabled,Rate per Family Member:,₹${group.groupSocialAmountPerFamilyMember || 0},Total Group Social:,₹${totalGroupSocial.toLocaleString()}`]
+          ] : []),
+          ...(group.loanInsuranceEnabled ? [
+            [`Loan Insurance:,Enabled,Rate:,${group.loanInsurancePercent || 0}%,Total Loan Insurance:,₹${totalLoanInsurance.toLocaleString()}`]
+          ] : []),
+          [''], // Empty row
+        ] : []),
         [`Generated on ${new Date().toLocaleString()}`]
       ].map(row => {
         // Make sure all elements in the row are strings to avoid CSV parsing issues
@@ -1367,7 +1426,7 @@ export default function ContributionTrackingPage() {
           if (typeof cell === 'string') return `"${cell.replace(/"/g, '""')}"`;
           return cell;
         }).join(',');
-      }).join('\n');
+      }      ).join('\n');
 
       // Download CSV with better filename
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -1407,11 +1466,12 @@ export default function ContributionTrackingPage() {
       // Group info section with light gray background
       worksheet.addRow([]);
       
-      // Add group info with better formatting
+      // Add group info with better formatting INCLUDING loan insurance and group social settings
       const infoSection = [
         ['Group Name:', group.name, '', 'Monthly Contribution:', `₹${group.monthlyContribution?.toLocaleString()}`],
         ['Report Date:', new Date().toLocaleDateString(), '', 'Interest Rate:', `${group.interestRate || 0}%`],
-        ['Collection Frequency:', group.collectionFrequency || 'Monthly', '', '', '']
+        ['Collection Frequency:', group.collectionFrequency || 'Monthly', '', 'Loan Insurance:', group.loanInsuranceEnabled ? `Enabled (${group.loanInsurancePercent || 0}%)` : 'Disabled'],
+        ['Group Social:', group.groupSocialEnabled ? `Enabled (₹${group.groupSocialAmountPerFamilyMember || 0} per family member)` : 'Disabled', '', 'Total Members:', memberContributions.length.toString()]
       ];
       
       // Add group info rows with formatting
@@ -1441,10 +1501,10 @@ export default function ContributionTrackingPage() {
       worksheet.addRow([]); // Empty row before table
       rowNum++;
       
-      // Headers with better formatting and current loan amount
+      // Headers with better formatting and current loan amount INCLUDING loan insurance and group social
       const headers = [
-        'Member Name', 'Expected Contribution', 'Expected Interest', 'Late Fine', 'Days Late',
-        'Total Expected', 'Amount Paid', 'Cash in Hand', 'Cash in Bank',
+        'Member Name', 'Expected Contribution', 'Expected Interest', 'Loan Insurance', 'Group Social',
+        'Late Fine', 'Days Late', 'Total Expected', 'Amount Paid', 'Cash in Hand', 'Cash in Bank',
         'Current Loan Amount', 'Remaining Amount', 'Status', 'Payment Date'
       ];
       const headerRow = worksheet.addRow(headers);
@@ -1480,6 +1540,8 @@ export default function ContributionTrackingPage() {
           member.memberName || '',
           formatCurrency(member.expectedContribution),
           formatCurrency(member.expectedInterest),
+          formatCurrency(member.loanInsuranceAmount || 0),
+          formatCurrency(member.groupSocialAmount || 0),
           formatCurrency(member.lateFineAmount || 0),
           (member.daysLate || 0).toString(),
           formatCurrency(member.totalExpected),
@@ -1514,11 +1576,13 @@ export default function ContributionTrackingPage() {
       // Calculate totals for summary
       const totalLoanAmounts = memberContributions.reduce((sum, c) => sum + (c.currentLoanBalance || 0), 0);
 
-      // Add summary row with cash allocation totals
+      // Add summary row with cash allocation totals INCLUDING loan insurance and group social
       const summaryRow = {
         'Member Name': 'TOTAL SUMMARY',
         'Expected Contribution': memberContributions.reduce((sum, c) => sum + c.expectedContribution, 0),
         'Expected Interest': memberContributions.reduce((sum, c) => sum + c.expectedInterest, 0),
+        'Loan Insurance': memberContributions.reduce((sum, c) => sum + (c.loanInsuranceAmount || 0), 0),
+        'Group Social': memberContributions.reduce((sum, c) => sum + (c.groupSocialAmount || 0), 0),
         'Late Fine': memberContributions.reduce((sum, c) => sum + (c.lateFineAmount || 0), 0),
         'Days Late': '---',
         'Total Expected': memberContributions.reduce((sum, c) => sum + c.totalExpected, 0),
@@ -3248,6 +3312,12 @@ export default function ContributionTrackingPage() {
                 {lateFinesEnabled && (
                   <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">Late Fine</th>
                 )}
+                {group?.loanInsuranceEnabled && (
+                  <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">Loan Insurance</th>
+                )}
+                {group?.groupSocialEnabled && (
+                  <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">Group Social</th>
+                )}
                 <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">Loan Balance</th>
                 <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">
                   <div className="text-center">Collection</div>
@@ -3271,6 +3341,8 @@ export default function ContributionTrackingPage() {
                   interestPaid: 0,
                   loanRepayment: 0,
                   lateFinePaid: 0,
+                  loanInsurancePaid: 0,
+                  groupSocialPaid: 0,
                   remainingLoan: contribution.currentLoanBalance || 0
                 };
 
@@ -3513,6 +3585,110 @@ export default function ContributionTrackingPage() {
                         )}
                       </td>
                     )}
+                    {group?.loanInsuranceEnabled && (
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm font-medium text-foreground mb-1">
+                          Due: ₹{formatCurrency(contribution.loanInsuranceAmount || 0)}
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Paid Amount</label>
+                          <input
+                            type="number"
+                            value={memberCollection.loanInsurancePaid === 0 ? '' : memberCollection.loanInsurancePaid}
+                            onFocus={(e) => {
+                              // Clear field if value is 0 for better UX
+                              if (Number(e.target.value) === 0) {
+                                e.target.value = '';
+                              }
+                            }}
+                            onChange={(e) => {
+                              const inputValue = e.target.value;
+                              const value = Math.max(0, Number(inputValue) || 0);
+                              const maxAmount = contribution.loanInsuranceAmount || 0;
+                              
+                              // Round up decimal values
+                              const roundedValue = Math.ceil(value);
+                              const finalValue = Math.min(roundedValue, maxAmount);
+                              
+                              // Auto-allocate to cash by default when entering payment
+                              const updatedCollection = {
+                                ...memberCollection,
+                                loanInsurancePaid: finalValue
+                              };
+                              
+                              // If user entered a payment amount, auto-allocate to cash
+                              if (finalValue > 0 && (memberCollection.cashAmount + memberCollection.bankAmount) === 0) {
+                                const totalPayments = (memberCollection.compulsoryContribution || 0) + (memberCollection.interestPaid || 0) + (memberCollection.loanRepayment || 0) + (memberCollection.lateFinePaid || 0) + finalValue;
+                                updatedCollection.cashAmount = totalPayments;
+                                updatedCollection.bankAmount = 0;
+                              }
+                              
+                              setMemberCollections(prev => ({
+                                ...prev,
+                                [memberId]: updatedCollection
+                              }));
+                            }}
+                            className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-purple-500 dark:bg-gray-700 dark:text-gray-100"
+                            min="0"
+                            max={contribution.loanInsuranceAmount || 0}
+                            step="0.01"
+                            disabled={currentPeriod?.isClosed}
+                          />
+                        </div>
+                      </td>
+                    )}
+                    {group?.groupSocialEnabled && (
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm font-medium text-foreground mb-1">
+                          Due: ₹{formatCurrency(contribution.groupSocialAmount || 0)}
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Paid Amount</label>
+                          <input
+                            type="number"
+                            value={memberCollection.groupSocialPaid === 0 ? '' : memberCollection.groupSocialPaid}
+                            onFocus={(e) => {
+                              // Clear field if value is 0 for better UX
+                              if (Number(e.target.value) === 0) {
+                                e.target.value = '';
+                              }
+                            }}
+                            onChange={(e) => {
+                              const inputValue = e.target.value;
+                              const value = Math.max(0, Number(inputValue) || 0);
+                              const maxAmount = contribution.groupSocialAmount || 0;
+                              
+                              // Round up decimal values
+                              const roundedValue = Math.ceil(value);
+                              const finalValue = Math.min(roundedValue, maxAmount);
+                              
+                              // Auto-allocate to cash by default when entering payment
+                              const updatedCollection = {
+                                ...memberCollection,
+                                groupSocialPaid: finalValue
+                              };
+                              
+                              // If user entered a payment amount, auto-allocate to cash
+                              if (finalValue > 0 && (memberCollection.cashAmount + memberCollection.bankAmount) === 0) {
+                                const totalPayments = (memberCollection.compulsoryContribution || 0) + (memberCollection.interestPaid || 0) + (memberCollection.loanRepayment || 0) + (memberCollection.lateFinePaid || 0) + (memberCollection.loanInsurancePaid || 0) + finalValue;
+                                updatedCollection.cashAmount = totalPayments;
+                                updatedCollection.bankAmount = 0;
+                              }
+                              
+                              setMemberCollections(prev => ({
+                                ...prev,
+                                [memberId]: updatedCollection
+                              }));
+                            }}
+                            className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-orange-500 dark:bg-gray-700 dark:text-gray-100"
+                            min="0"
+                            max={contribution.groupSocialAmount || 0}
+                            step="0.01"
+                            disabled={currentPeriod?.isClosed}
+                          />
+                        </div>
+                      </td>
+                    )}
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm font-medium text-primary mb-1">
                         Balance: ₹{formatCurrency(contribution.currentLoanBalance)}
@@ -3674,7 +3850,12 @@ export default function ContributionTrackingPage() {
               })}
               {(showCompleted ? completedContributions : pendingContributions).length === 0 && (
                 <tr>
-                  <td colSpan={lateFinesEnabled ? 9 : 8} className="px-6 py-12 text-center">
+                  <td colSpan={
+                    8 + 
+                    (lateFinesEnabled ? 1 : 0) + 
+                    (group?.loanInsuranceEnabled ? 1 : 0) + 
+                    (group?.groupSocialEnabled ? 1 : 0)
+                  } className="px-6 py-12 text-center">
                     <div className="text-muted">
                       <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 mx-auto mb-4 opacity-50" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />

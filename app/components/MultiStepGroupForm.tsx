@@ -27,6 +27,7 @@ const memberDataSchema = z.object({
   name: z.string(), // Include name for display purposes
   currentShare: z.number().nonnegative().optional(),
   currentLoanAmount: z.number().nonnegative().optional(),
+  familyMembersCount: z.number().int().positive('Family size must be at least 1').optional(),
 });
 
 // Define CollectionFrequency enum for Zod validation
@@ -113,6 +114,14 @@ const groupSchema = z.object({
   interestRate: z.number().nonnegative().max(100, 'Interest rate cannot exceed 100%').optional(),
   monthlyContribution: z.number().nonnegative().optional(),
   globalShareAmount: z.number().nonnegative().optional(),
+  
+  // Loan Insurance Settings
+  loanInsuranceEnabled: z.boolean().optional(),
+  loanInsurancePercent: z.number().nonnegative().max(100, 'Loan insurance rate cannot exceed 100%').optional(),
+  
+  // Group Social Settings
+  groupSocialEnabled: z.boolean().optional(),
+  groupSocialAmountPerFamilyMember: z.number().nonnegative().optional(),
 }).superRefine((data, ctx) => {
   // Conditional validation based on collection frequency
   if (data.collectionFrequency === 'MONTHLY') {
@@ -819,6 +828,15 @@ The PDF may contain scanned images or use an unsupported format.
       balanceInBank: 0,
       interestRate: 0,
       monthlyContribution: 0,
+      globalShareAmount: 0,
+      
+      // Loan Insurance defaults
+      loanInsuranceEnabled: false,
+      loanInsurancePercent: 0,
+      
+      // Group Social defaults
+      groupSocialEnabled: false,
+      groupSocialAmountPerFamilyMember: 0,
     },
   });
 
@@ -833,6 +851,13 @@ The PDF may contain scanned images or use an unsupported format.
   const collectionFrequency = useWatch({ control, name: 'collectionFrequency' });
   // const lateFineEnabled = useWatch({ control, name: 'lateFineRule.isEnabled' });
   // const lateFineRuleType = useWatch({ control, name: 'lateFineRule.ruleType' });
+  
+  // Watch loan insurance and group social fields for dynamic visibility - NOW USING CONTROLLER PATTERN
+  // const loanInsuranceEnabled = useWatch({ control, name: 'loanInsuranceEnabled' });
+  // const groupSocialEnabled = useWatch({ control, name: 'groupSocialEnabled' });
+  
+  // Watch group social enabled for family size field requirement indicator
+  const groupSocialEnabled = useWatch({ control, name: 'groupSocialEnabled' });
 
   // Clear irrelevant fields when collection frequency changes
   useEffect(() => {
@@ -1348,9 +1373,8 @@ The PDF may contain scanned images or use an unsupported format.
     }
   };
 
-  // Step 1: Basic Information
   // Step 1: Basic Information - Memoized to prevent unnecessary re-renders
-  const Step1 = (
+  const Step1 = useMemo(() => (
     <div className="card p-6">
       <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-6">Step 1: Basic Information</h2>
       <div className="space-y-4">
@@ -1601,7 +1625,7 @@ The PDF may contain scanned images or use an unsupported format.
                             </label>
                             <select
                               id="lateFineRuleType"
-                              value={ruleTypeField.value || ""}
+                              value={ruleTypeField.value || ''}
                               onChange={(e) => ruleTypeField.onChange(e.target.value)}
                               className="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                             >
@@ -1801,7 +1825,7 @@ The PDF may contain scanned images or use an unsupported format.
         </div>
       </div>
     </div>
-  );
+  ), [register, errors, collectionFrequency]);
 
   // Member import interfaces and functions - moved here to fix hoisting issue
   interface MemberImportRow {
@@ -2579,7 +2603,6 @@ The PDF may contain scanned images or use an unsupported format.
         </div>
       </div>
     </div>
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- Complex component with many interdependent functions
   ), [showMemberImport, memberImportError, memberImportStatus, displayableMembers, isFileProcessing, fileProcessingType, showImportedMembers, importedMembers, showCreateMemberForm, newMemberName, newMemberEmail, newMemberPhone, newMemberLoan, createMemberError, isCreatingMember]);
 
   // Step 3: Member Selection & Group Setup - Memoized to prevent unnecessary re-renders
@@ -2611,6 +2634,11 @@ The PDF may contain scanned images or use an unsupported format.
                   <svg className="h-5 w-5 text-blue-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
                     <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
                   </svg>
+                </div>
+                <div className="ml-3">
+                  <p className="text-sm text-blue-700 dark:text-blue-200">
+                    {leaderLinkingStatus}
+                  </p>
                 </div>
               </div>
             </div>
@@ -3004,6 +3032,141 @@ The PDF may contain scanned images or use an unsupported format.
             </div>
           </div>
 
+          {/* Loan Insurance Settings */}
+          <div className="bg-yellow-50 dark:bg-yellow-900/20 p-4 rounded-lg border border-yellow-200 dark:border-yellow-800">
+            <h3 className="text-lg font-medium text-yellow-900 dark:text-yellow-100 mb-3">Loan Insurance Settings</h3>
+            <Controller
+              name="loanInsuranceEnabled"
+              control={control}
+              render={({ field }) => (
+                <>
+                  <div className="flex items-center mb-3">
+                    <input
+                      type="checkbox"
+                      id="loanInsuranceEnabled"
+                      checked={field.value || false}
+                      onChange={(e) => {
+                        field.onChange(e.target.checked);
+                      }}
+                      className="mr-2"
+                    />
+                    <label htmlFor="loanInsuranceEnabled" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Enable Loan Insurance System
+                    </label>
+                  </div>
+                  
+                  {/* Use field.value directly instead of useWatch */}
+                  {field.value === true && (
+                    <div className="space-y-4 pl-6 border-l-4 border-yellow-400 dark:border-yellow-500 bg-yellow-50 dark:bg-yellow-800/50 p-4 rounded shadow-sm">
+                      <div className="text-yellow-800 dark:text-yellow-200 font-medium mb-2">
+                        ✅ Loan Insurance Configuration
+                      </div>
+                      <div>
+                        <label htmlFor="loanInsurancePercent" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                          Loan Insurance Rate (% per loan amount) <span className="text-red-500">*</span>
+                        </label>
+                        <Controller
+                          name="loanInsurancePercent"
+                          control={control}
+                          defaultValue={0}
+                          render={({ field: { onChange, onBlur, value, name } }) => (
+                            <input
+                              type="number"
+                              id={name}
+                              value={value || ''}
+                              onChange={e => onChange(parseFloat(e.target.value) || 0)}
+                              onBlur={onBlur}
+                              min="0"
+                              max="100"
+                              step="0.1"
+                              className="mt-1 block w-full max-w-xs px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-yellow-500 focus:border-yellow-500"
+                              placeholder="e.g., 1.5"
+                            />
+                          )}
+                        />
+                        {errors.loanInsurancePercent && (
+                          <p className="mt-1 text-sm text-red-500">{errors.loanInsurancePercent.message}</p>
+                        )}
+                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                          Members with loans will pay this percentage of their loan amount as insurance
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            />
+          </div>
+
+          {/* Group Social Settings */}
+          <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg border border-green-200 dark:border-green-800">
+            <h3 className="text-lg font-medium text-green-900 dark:text-green-100 mb-3">Group Social Settings</h3>
+            <Controller
+              name="groupSocialEnabled"
+              control={control}
+              render={({ field }) => (
+                <>
+                  <div className="flex items-center mb-3">
+                    <input
+                      type="checkbox"
+                      id="groupSocialEnabled"
+                      checked={field.value || false}
+                      onChange={(e) => {
+                        field.onChange(e.target.checked);
+                      }}
+                      className="mr-2"
+                    />
+                    <label htmlFor="groupSocialEnabled" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Enable Group Social System
+                    </label>
+                  </div>
+                  
+                  {/* Use field.value directly instead of useWatch */}
+                  {field.value === true && (
+                    <div className="space-y-4 pl-6 border-l-4 border-green-400 dark:border-green-500 bg-green-50 dark:bg-green-800/50 p-4 rounded shadow-sm">
+                      <div className="text-green-800 dark:text-green-200 font-medium mb-2">
+                        ✅ Group Social Configuration
+                      </div>
+                      <div>
+                        <label htmlFor="groupSocialAmountPerFamilyMember" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                          Amount per Family Member (₹) <span className="text-gray-500 text-sm">(Optional)</span>
+                        </label>
+                        <Controller
+                          name="groupSocialAmountPerFamilyMember"
+                          control={control}
+                          defaultValue={0}
+                          render={({ field: { onChange, onBlur, value, name } }) => (
+                            <input
+                              type="number"
+                              id={name}
+                              value={value || ''}
+                              onChange={e => onChange(parseFloat(e.target.value) || 0)}
+                              onBlur={onBlur}
+                              min="0"
+                              className="mt-1 block w-full max-w-xs px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-green-500 focus:border-green-500"
+                              placeholder="e.g., 50 (Leave 0 if not applicable)"
+                            />
+                          )}
+                        />
+                        {errors.groupSocialAmountPerFamilyMember && (
+                          <p className="mt-1 text-sm text-red-500">{errors.groupSocialAmountPerFamilyMember.message}</p>
+                        )}
+                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                          Leave as 0 if you don't want to set a specific amount. Family-based tracking will still be available.
+                        </p>
+                        <div className="mt-2 p-3 bg-green-100 dark:bg-green-900/30 rounded border border-green-200 dark:border-green-800">
+                          <p className="text-sm text-green-800 dark:text-green-200">
+                            ✅ <strong>Group Social enabled!</strong> Members can set their family size for fair contribution tracking.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            />
+          </div>
+
           {/* Global Share Amount */}
           <div className="bg-purple-50 dark:bg-purple-900/20 p-4 rounded-lg border border-purple-200 dark:border-purple-800">
             <h3 className="text-lg font-medium text-purple-900 dark:text-purple-100 mb-3">Member Share Information</h3>
@@ -3064,16 +3227,16 @@ The PDF may contain scanned images or use an unsupported format.
           {memberFieldsData.length > 0 ? (
             <>
               <div>
-                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-3">Member Loan Data</h3>
+                <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-3">Member Loan Data & Family Size</h3>
                 <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                  Enter each member&apos;s current loan amount (if any).
+                  Enter each member&apos;s current loan amount (if any) and family size for group social calculations.
                 </p>
               </div>
               <div className="space-y-4 max-h-96 overflow-y-auto pr-2">
                 {memberFields.map((field, index) => (
                   <div key={field.fieldId} className="p-4 border rounded-md bg-gray-50 dark:bg-gray-800/30">
                     <h4 className="font-medium text-gray-800 dark:text-gray-200 mb-3 text-md">{field.name}</h4>
-                    <div className="grid grid-cols-1 gap-4">
+                    <div className="grid grid-cols-2 gap-4">
                       <div>
                         <label htmlFor={`members.${index}.currentLoanAmount`} className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
                           Current Loan Amount (₹)
@@ -3097,6 +3260,37 @@ The PDF may contain scanned images or use an unsupported format.
                         />
                         {errors.members?.[index]?.currentLoanAmount && (
                           <p className="mt-1 text-xs text-red-500">{errors.members[index]?.currentLoanAmount?.message}</p>
+                        )}
+                      </div>
+                      <div>
+                        <label htmlFor={`members.${index}.familyMembersCount`} className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                          Family Size {groupSocialEnabled && <span className="text-red-500">*</span>}
+                        </label>
+                        <Controller
+                          name={`members.${index}.familyMembersCount`}
+                          control={control}
+                          defaultValue={1}
+                          render={({ field: { onChange, onBlur, value, name } }) => (
+                            <input
+                              type="number"
+                              id={name}
+                              value={value || 1}
+                              onChange={e => onChange(parseInt(e.target.value) || 1)}
+                              onBlur={onBlur}
+                              min="1"
+                              max="20"
+                              className="input-field-sm"
+                              placeholder="e.g., 4"
+                            />
+                          )}
+                        />
+                        {errors.members?.[index]?.familyMembersCount && (
+                          <p className="mt-1 text-xs text-red-500">{errors.members[index]?.familyMembersCount?.message}</p>
+                        )}
+                        {groupSocialEnabled && (
+                          <p className="mt-1 text-xs text-blue-600 dark:text-blue-400">
+                            Group Social: ₹{((watch('groupSocialAmountPerFamilyMember') || 0) * (watch(`members.${index}.familyMembersCount`) || 1)).toFixed(2)}
+                          </p>
                         )}
                       </div>
                     </div>
@@ -3187,11 +3381,6 @@ The PDF may contain scanned images or use an unsupported format.
       const createdMembers: { id: string; name: string }[] = [];
       const errors: string[] = [];
       
-      // Get current user's linked member name to exclude from import
-      const currentUserLinkedMember = displayableMembers.find(m => m.id === session?.user?.memberId);
-      const currentUserMemberName = currentUserLinkedMember?.name;
-      const currentUserName = session?.user?.name; // Also check against user's registered name
-
       console.log('Processing members for creation...');
       
       // Check if any members already exist by making a quick API call

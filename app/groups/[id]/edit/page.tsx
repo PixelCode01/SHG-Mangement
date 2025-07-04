@@ -34,6 +34,10 @@ interface GroupEditData {
   description: string | null;
   bankAccountNumber: string | null;
   bankName: string | null;
+  loanInsuranceEnabled?: boolean;
+  loanInsurancePercent?: number;
+  groupSocialEnabled?: boolean;
+  groupSocialAmount?: number;
   members: MemberEditData[]; // Array of members with historical data
   lateFineRules?: Array<{
     id: string;
@@ -77,6 +81,14 @@ const groupInfoSchema = z.object({
   dailyAmount: z.number().nonnegative('Cannot be negative').optional().nullable(),
   dailyPercentage: z.number().nonnegative('Cannot be negative').max(100, 'Percentage cannot exceed 100%').optional().nullable(),
   tierRules: z.array(lateFineRuleTierSchema).optional().nullable(),
+  
+  // Loan Insurance settings
+  loanInsuranceEnabled: z.boolean().optional(),
+  loanInsurancePercent: z.number().nonnegative('Cannot be negative').max(100, 'Percentage cannot exceed 100%').optional().nullable(),
+  
+  // Group Social settings
+  groupSocialEnabled: z.boolean().optional(),
+  groupSocialAmountPerFamilyMember: z.number().nonnegative('Cannot be negative').optional().nullable(),
 });
 
 // Schema for the entire form including member historical data
@@ -87,6 +99,7 @@ const editFormSchema = groupInfoSchema.extend({
     currentShareAmount: z.number().nonnegative('Cannot be negative').nullable(),
     currentLoanAmount: z.number().nonnegative('Cannot be negative').nullable(),
     initialInterest: z.number().nonnegative('Cannot be negative').nullable(),
+    familyMembersCount: z.number().int().positive('Must be at least 1').optional().nullable(),
   })),
   lateFineTierRules: z.array(lateFineRuleTierSchema).optional().nullable(),
 });
@@ -145,6 +158,14 @@ export default function EditGroupPage({ params }: EditGroupPageProps) {
       dailyPercentage: null,
       tierRules: [],
       lateFineTierRules: null,
+      
+      // Loan Insurance defaults
+      loanInsuranceEnabled: false,
+      loanInsurancePercent: null,
+      
+      // Group Social defaults
+      groupSocialEnabled: false,
+      groupSocialAmountPerFamilyMember: null,
     },
   });
 
@@ -183,6 +204,10 @@ export default function EditGroupPage({ params }: EditGroupPageProps) {
   const debugDailyAmount = watch("dailyAmount");
   const debugDailyPercentage = watch("dailyPercentage");
   const debugTierRules = watch("lateFineTierRules");
+  
+  // Watch loan insurance and group social values
+  const loanInsuranceEnabled = watch("loanInsuranceEnabled");
+  const groupSocialEnabled = watch("groupSocialEnabled");
   
   useEffect(() => {
     console.log('🔍 [DEBUG STATE] Current form values:');
@@ -238,6 +263,14 @@ export default function EditGroupPage({ params }: EditGroupPageProps) {
         setValue('description', groupData.description || '');
         setValue('bankAccountNumber', groupData.bankAccountNumber || '');
         setValue('bankName', groupData.bankName || '');
+        
+        // Set loan insurance settings
+        setValue('loanInsuranceEnabled', groupData.loanInsuranceEnabled || false);
+        setValue('loanInsurancePercent', groupData.loanInsurancePercent || null);
+        
+        // Set group social settings
+        setValue('groupSocialEnabled', groupData.groupSocialEnabled || false);
+        setValue('groupSocialAmountPerFamilyMember', (groupData as any).groupSocialAmountPerFamilyMember || null);
         
         // Handle late fine configuration with detailed debugging and proper type safety
         const hasLateFineRules = groupData.lateFineRules && groupData.lateFineRules.length > 0;
@@ -335,6 +368,7 @@ export default function EditGroupPage({ params }: EditGroupPageProps) {
           currentShareAmount: m.currentShareAmount,
           currentLoanAmount: m.currentLoanAmount,
           initialInterest: m.initialInterest,
+          familyMembersCount: (m as any).familyMembersCount,
         })));
 
         // DEBUG: Log the final form values after population
@@ -402,6 +436,14 @@ export default function EditGroupPage({ params }: EditGroupPageProps) {
                 tier.isPercentage === 'true' // Handle possible string values from form
             })) : undefined
         } : undefined,
+        
+        // Loan Insurance settings
+        loanInsuranceEnabled: data.loanInsuranceEnabled || false,
+        loanInsurancePercent: data.loanInsuranceEnabled ? data.loanInsurancePercent : null,
+        
+        // Group Social settings
+        groupSocialEnabled: data.groupSocialEnabled || false,
+        groupSocialAmountPerFamilyMember: data.groupSocialEnabled ? data.groupSocialAmountPerFamilyMember : null,
       };
 
       console.log('🔍 [DEBUG] Sending group update payload:', JSON.stringify(groupPayload, null, 2));
@@ -430,6 +472,7 @@ export default function EditGroupPage({ params }: EditGroupPageProps) {
           currentShareAmount: member.currentShareAmount,
           currentLoanAmount: member.currentLoanAmount,
           initialInterest: member.initialInterest,
+          familyMembersCount: member.familyMembersCount,
         };
 
         // Only send update if data is present
@@ -825,6 +868,116 @@ export default function EditGroupPage({ params }: EditGroupPageProps) {
               )}
             </div>
 
+            {/* Loan Insurance Settings */}
+            <div className="md:col-span-2">
+              <div className="space-y-4 p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700/50 rounded-lg">
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="loanInsuranceEnabled"
+                    {...register("loanInsuranceEnabled")}
+                    className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                    disabled={isSaving}
+                  />
+                  <label htmlFor="loanInsuranceEnabled" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Enable Loan Insurance System
+                  </label>
+                </div>
+                {errors.loanInsuranceEnabled && (
+                  <p className="mt-1 text-sm text-red-600">{errors.loanInsuranceEnabled.message}</p>
+                )}
+
+                {loanInsuranceEnabled && (
+                  <div className="mt-4 space-y-3">
+                    <div>
+                      <label htmlFor="loanInsurancePercent" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        Insurance Percentage (% of loan amount per period)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        id="loanInsurancePercent"
+                        {...register("loanInsurancePercent", { valueAsNumber: true })}
+                        className="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm disabled:opacity-50"
+                        placeholder="e.g., 0.2 for 0.2% of loan amount"
+                        disabled={isSaving}
+                      />
+                      {errors.loanInsurancePercent && (
+                        <p className="mt-1 text-sm text-red-600">{errors.loanInsurancePercent.message}</p>
+                      )}
+                    </div>
+                    
+                    <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 p-3 rounded text-sm text-blue-800 dark:text-blue-200">
+                      <p><strong>How loan insurance works:</strong></p>
+                      <ul className="list-disc pl-4 mt-1 space-y-1">
+                        <li>Each member with an active loan pays this percentage of their loan amount every period</li>
+                        <li>For example: If a member has ₹10,000 loan and insurance is 0.2%, they pay ₹20 per period</li>
+                        <li>Insurance amount will be shown as a separate column in contribution tracking</li>
+                        <li>Total loan insurance collected will be displayed in group standing</li>
+                      </ul>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Group Social Settings */}
+            <div className="md:col-span-2">
+              <div className="space-y-4 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700/50 rounded-lg">
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="groupSocialEnabled"
+                    {...register("groupSocialEnabled")}
+                    className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                    disabled={isSaving}
+                  />
+                  <label htmlFor="groupSocialEnabled" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Enable Group Social Fund (Family-based)
+                  </label>
+                </div>
+                {errors.groupSocialEnabled && (
+                  <p className="mt-1 text-sm text-red-600">{errors.groupSocialEnabled.message}</p>
+                )}
+
+                {groupSocialEnabled && (
+                  <div className="mt-4 space-y-3">
+                    <div>
+                      <label htmlFor="groupSocialAmountPerFamilyMember" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        Amount per Family Member per Period (₹)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        id="groupSocialAmountPerFamilyMember"
+                        {...register("groupSocialAmountPerFamilyMember", { valueAsNumber: true })}
+                        className="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm disabled:opacity-50"
+                        placeholder="e.g., 10 for ₹10 per family member per period"
+                        disabled={isSaving}
+                      />
+                      {errors.groupSocialAmountPerFamilyMember && (
+                        <p className="mt-1 text-sm text-red-600">{errors.groupSocialAmountPerFamilyMember.message}</p>
+                      )}
+                    </div>
+                    
+                    <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 p-3 rounded text-sm text-blue-800 dark:text-blue-200">
+                      <p><strong>How family-based group social fund works:</strong></p>
+                      <ul className="list-disc pl-4 mt-1 space-y-1">
+                        <li>Each member pays based on their number of family members</li>
+                        <li>Example: If amount is ₹10 per family member and a member has 4 family members, they pay ₹40 per period</li>
+                        <li>Family members count is set individually for each member in the member details section below</li>
+                        <li>Total group social amount = (Amount per family member) × (Member's family count)</li>
+                        <li>Amount will be shown as a separate column in contribution tracking</li>
+                      </ul>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
             <div>
               <label htmlFor="address" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 Address <span className="text-gray-500 text-xs">(Optional)</span>
@@ -1001,7 +1154,7 @@ export default function EditGroupPage({ params }: EditGroupPageProps) {
               {memberFields.map((member, index) => (
                 <div key={member.fieldId} className="border rounded-md p-4 bg-background dark:border-gray-700">
                   <h3 className="font-medium text-foreground mb-3">{member.name}</h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
                     {/* Current Share Amount */}
                     <div>
                       <label htmlFor={`members.${index}.currentShareAmount`} className="block text-xs font-medium text-muted mb-1">Current Share Amt</label>
@@ -1049,6 +1202,31 @@ export default function EditGroupPage({ params }: EditGroupPageProps) {
                       {errors.members?.[index]?.currentLoanAmount && (
                         <p className="mt-1 text-xs text-red-600">{errors.members[index]?.currentLoanAmount?.message}</p>
                       )}
+                    </div>
+                    {/* Family Members Count */}
+                    <div>
+                      <label htmlFor={`members.${index}.familyMembersCount`} className="block text-xs font-medium text-muted mb-1">Family Members</label>
+                      <Controller
+                        name={`members.${index}.familyMembersCount`}
+                        control={control}
+                        render={({ field }) => (
+                          <input
+                            type="number"
+                            min="1"
+                            step="1"
+                            {...field}
+                            value={field.value ?? ''}
+                            onChange={e => field.onChange(e.target.value === '' ? null : parseInt(e.target.value))}
+                            className="input-field text-sm"
+                            placeholder="1"
+                            disabled={isSaving}
+                          />
+                        )}
+                      />
+                      {errors.members?.[index]?.familyMembersCount && (
+                        <p className="mt-1 text-xs text-red-600">{errors.members[index]?.familyMembersCount?.message}</p>
+                      )}
+                      <p className="mt-1 text-xs text-gray-500">For group social calculation</p>
                     </div>
                     {/* Interest */}
                     <div>
