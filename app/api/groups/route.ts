@@ -57,11 +57,28 @@ const createGroupSchema = z.object({
   monthlyContribution: z.number().nonnegative().optional(),
   interestRate: z.number().nonnegative().max(100, 'Interest rate cannot exceed 100%').optional(),
   lateFineRule: lateFineRuleSchema,
+  
+  // Loan Insurance Settings
+  loanInsuranceEnabled: z.boolean().optional(),
+  loanInsurancePercent: z.number().nonnegative().max(100, 'Loan insurance rate cannot exceed 100%').optional(),
+  loanInsuranceBalance: z.number().nonnegative().optional(),
+  
+  // Group Social Settings
+  groupSocialEnabled: z.boolean().optional(),
+  groupSocialAmountPerFamilyMember: z.number().nonnegative().optional(),
+  groupSocialBalance: z.number().nonnegative().optional(),
+  
+  // Period Tracking Settings
+  includeDataTillCurrentPeriod: z.boolean().optional(),
+  currentPeriodMonth: z.number().int().min(1).max(12).optional(),
+  currentPeriodYear: z.number().int().optional(),
+  
   members: z.array(z.object({
     memberId: z.string().min(1),
     currentShareAmount: z.number().nonnegative().optional(),
     currentLoanAmount: z.number().nonnegative().optional(),
     initialInterest: z.number().nonnegative().optional(),
+    familyMembersCount: z.number().int().positive().optional(),
   })).min(1, 'At least one member (including the leader) is required'),
 }).refine((data) => {
   // Custom validation to ensure collection day is set based on frequency
@@ -322,6 +339,15 @@ export async function POST(request: NextRequest) {
       monthlyContribution,
       interestRate,
       lateFineRule,
+      loanInsuranceEnabled,
+      loanInsurancePercent,
+      loanInsuranceBalance,
+      groupSocialEnabled,
+      groupSocialAmountPerFamilyMember,
+      groupSocialBalance,
+      includeDataTillCurrentPeriod,
+      currentPeriodMonth,
+      currentPeriodYear,
       members: membersData
     } = validatedData;
 
@@ -417,6 +443,18 @@ export async function POST(request: NextRequest) {
         cashInHand,
         balanceInBank,
         monthlyContribution,
+        // Loan Insurance Settings
+        loanInsuranceEnabled: loanInsuranceEnabled ?? false,
+        loanInsurancePercent,
+        loanInsuranceBalance: loanInsuranceBalance ?? 0,
+        // Group Social Settings
+        groupSocialEnabled: groupSocialEnabled ?? false,
+        groupSocialAmountPerFamilyMember,
+        groupSocialBalance: groupSocialBalance ?? 0,
+        // Period Tracking Settings
+        includeDataTillCurrentPeriod: includeDataTillCurrentPeriod ?? false,
+        currentPeriodMonth,
+        currentPeriodYear,
       };
 
       // Add optional fields only if they have values
@@ -470,6 +508,16 @@ export async function POST(request: NextRequest) {
             initialInterest: memberInfo.initialInterest !== undefined ? memberInfo.initialInterest : null,
           })),
         });
+        
+        // Update family members count for each member if provided
+        for (const memberInfo of membersData) {
+          if (memberInfo.familyMembersCount !== undefined) {
+            await tx.member.update({
+              where: { id: memberInfo.memberId },
+              data: { familyMembersCount: memberInfo.familyMembersCount }
+            });
+          }
+        }
       }
 
       // Since we've automatically linked the user to the selected leader member,

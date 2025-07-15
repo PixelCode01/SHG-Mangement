@@ -272,14 +272,21 @@ model Group {
   balanceInBank       Float? // Balance in bank at group creation  
   monthlyContribution Float? // Monthly contribution per member
   interestRate        Float? // Annual interest rate percentage
-
+  
   // Loan Insurance Settings
   loanInsuranceEnabled Boolean @default(false) // Whether loan insurance is enabled
   loanInsurancePercent Float? // Percentage of loan amount for insurance (e.g., 0.2 for 0.2%)
-
+  loanInsuranceBalance Float? // Current balance in loan insurance fund
+  
   // Group Social Settings
   groupSocialEnabled Boolean @default(false) // Whether group social is enabled
   groupSocialAmountPerFamilyMember Float? // Amount per family member for group social (e.g., ₹10 per family member)
+  groupSocialBalance Float? // Current balance in group social fund
+  
+  // Period Tracking Settings
+  includeDataTillCurrentPeriod Boolean @default(false) // Whether historical data is included till current period
+  currentPeriodMonth Int? // Current period month (1-12)
+  currentPeriodYear Int? // Current period year
 
   createdAt            DateTime                @default(now()) // Date the record was created in the DB
   updatedAt            DateTime                @updatedAt

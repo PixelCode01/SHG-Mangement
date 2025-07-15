@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import Navigation from "./components/Navigation";
 import ClientSetup from "./components/ClientSetup";
+import PerformanceOptimizer from "./components/PerformanceOptimizer";
 import { ThemeProvider } from "./components/ThemeProvider";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import { Analytics } from "@vercel/analytics/next";
@@ -10,16 +11,23 @@ import { Analytics } from "@vercel/analytics/next";
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
+  display: "swap",
+  preload: true,
 });
 
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+  display: "swap",
+  preload: true,
 });
 
 export const metadata: Metadata = {
   title: "SHG Management",
   description: "Self-Help Group Management System",
+  other: {
+    'color-scheme': 'light dark',
+  }
 };
 
 export default function RootLayout({
@@ -39,6 +47,7 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
+          <PerformanceOptimizer />
           <ClientSetup>
             <div className="flex flex-col min-h-screen">
               <Navigation />
@@ -81,8 +90,8 @@ export default function RootLayout({
             </div>
           </ClientSetup>
         </ThemeProvider>
-        <SpeedInsights />
-        <Analytics />
+        {process.env.NODE_ENV === 'production' && <SpeedInsights />}
+        {process.env.NODE_ENV === 'production' && <Analytics />}
       </body>
     </html>
   );

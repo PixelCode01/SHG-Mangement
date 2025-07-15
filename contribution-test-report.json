@@ -1,0 +1,116 @@
+{
+  "testSummary": {
+    "timestamp": "2025-07-14T09:46:08.121Z",
+    "totalIssues": 11,
+    "criticalIssues": 5,
+    "apiTestsPassed": 0,
+    "apiTestsTotal": 3,
+    "submissionTestsPassed": 0,
+    "submissionTestsTotal": 1
+  },
+  "detailedResults": {
+    "frontendIssues": [
+      {
+        "file": "app/layout.tsx",
+        "issue": "Vercel Analytics/Speed Insights causing CSP violations",
+        "severity": "HIGH",
+        "recommendation": "Remove or configure CSP properly"
+      },
+      {
+        "file": "components/ClientSetup.tsx",
+        "issue": "File not found",
+        "severity": "HIGH",
+        "recommendation": "Ensure file exists and is properly configured"
+      },
+      {
+        "file": "components/Navigation.tsx",
+        "issue": "File not found",
+        "severity": "HIGH",
+        "recommendation": "Ensure file exists and is properly configured"
+      },
+      {
+        "file": "next.config.js",
+        "issue": "File not found",
+        "severity": "HIGH",
+        "recommendation": "Ensure file exists and is properly configured"
+      },
+      {
+        "file": "package.json",
+        "issue": "Vercel Analytics/Speed Insights causing CSP violations",
+        "severity": "HIGH",
+        "recommendation": "Remove or configure CSP properly"
+      }
+    ],
+    "apiTests": [
+      {
+        "endpoint": "Get Group Data",
+        "status": 401,
+        "success": false,
+        "responseSize": 26,
+        "timestamp": "2025-07-14T09:46:07.699Z"
+      },
+      {
+        "endpoint": "Get Current Period",
+        "status": 401,
+        "success": false,
+        "responseSize": 24,
+        "timestamp": "2025-07-14T09:46:07.869Z"
+      },
+      {
+        "endpoint": "Get Current Contributions",
+        "status": 401,
+        "success": false,
+        "responseSize": 24,
+        "timestamp": "2025-07-14T09:46:08.043Z"
+      }
+    ],
+    "submissionTests": [
+      {
+        "step": "Workflow Error",
+        "success": false,
+        "error": "Failed to get contributions: 401",
+        "timestamp": "2025-07-14T09:46:08.120Z"
+      }
+    ],
+    "cspIssues": [
+      {
+        "type": "Content Security Policy Violation",
+        "description": "Refused to load the script 'https://va.vercel-scripts.com/v1/speed-insights/script.debug.js'",
+        "severity": "MEDIUM",
+        "solution": "Add Vercel domains to CSP script-src directive"
+      },
+      {
+        "type": "Content Security Policy Violation",
+        "description": "Refused to load the script 'https://va.vercel-scripts.com/v1/script.debug.js'",
+        "severity": "MEDIUM",
+        "solution": "Add Vercel domains to CSP script-src directive"
+      },
+      {
+        "type": "Content Security Policy Violation",
+        "description": "[Vercel Speed Insights] Failed to load script",
+        "severity": "MEDIUM",
+        "solution": "Add Vercel domains to CSP script-src directive"
+      },
+      {
+        "type": "Content Security Policy Violation",
+        "description": "[Vercel Web Analytics] Failed to load script",
+        "severity": "MEDIUM",
+        "solution": "Add Vercel domains to CSP script-src directive"
+      }
+    ],
+    "performanceIssues": [
+      {
+        "type": "Performance Warning",
+        "description": "The resource was preloaded using link preload but not used within a few seconds",
+        "severity": "LOW",
+        "solution": "Optimize resource loading and remove dev tools warnings in production"
+      },
+      {
+        "type": "Performance Warning",
+        "description": "Download the React DevTools for a better development experience",
+        "severity": "LOW",
+        "solution": "Optimize resource loading and remove dev tools warnings in production"
+      }
+    ]
+  }
+}

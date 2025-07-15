@@ -10,6 +10,7 @@ interface MembershipWithMember {
     id: string;
     name: string;
     currentLoanAmount?: number;
+    familyMembersCount?: number;
     loans?: Array<{ currentBalance: number }>;
   };
   joinedAt: Date;
@@ -59,10 +60,17 @@ const updateGroupSchema = z.object({
   // Loan Insurance settings
   loanInsuranceEnabled: z.boolean().optional(),
   loanInsurancePercent: z.number().nonnegative().max(100).optional().nullable(),
+  loanInsuranceBalance: z.number().nonnegative().optional().nullable(),
   
   // Group Social settings
   groupSocialEnabled: z.boolean().optional(),
   groupSocialAmountPerFamilyMember: z.number().nonnegative().optional().nullable(),
+  groupSocialBalance: z.number().nonnegative().optional().nullable(),
+  
+  // Period tracking settings
+  includeDataTillCurrentPeriod: z.boolean().optional(),
+  currentPeriodMonth: z.number().int().min(1).max(12).optional().nullable(),
+  currentPeriodYear: z.number().int().min(2000).max(2100).optional().nullable(),
   
   // Note: Member list updates are handled by separate endpoints (/api/groups/[id]/members)
 });
@@ -192,6 +200,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
           currentShareAmount: currentShareAmountPerMember, // Calculated current share
           currentLoanAmount: totalLoanBalance,
           initialInterest: m.initialInterest || 0,
+          familyMembersCount: m.member.familyMembersCount || null, // Add family members count
           // Include both imported loans (membership) and new loans (loans table) for repayment
           currentLoanBalance: totalLoanBalance,
         };
@@ -349,6 +358,11 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
             return;
           }
           
+          if (key === 'loanInsuranceBalance') {
+            updateData.loanInsuranceBalance = value;
+            return;
+          }
+          
           if (key === 'groupSocialEnabled') {
             updateData.groupSocialEnabled = Boolean(value);
             return;
@@ -356,6 +370,27 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
           
           if (key === 'groupSocialAmountPerFamilyMember') {
             updateData.groupSocialAmountPerFamilyMember = value;
+            return;
+          }
+          
+          if (key === 'groupSocialBalance') {
+            updateData.groupSocialBalance = value;
+            return;
+          }
+          
+          // Handle period tracking fields
+          if (key === 'includeDataTillCurrentPeriod') {
+            updateData.includeDataTillCurrentPeriod = Boolean(value);
+            return;
+          }
+          
+          if (key === 'currentPeriodMonth') {
+            updateData.currentPeriodMonth = value;
+            return;
+          }
+          
+          if (key === 'currentPeriodYear') {
+            updateData.currentPeriodYear = value;
             return;
           }
           

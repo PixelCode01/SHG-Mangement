@@ -75,7 +75,7 @@ export async function POST(request: NextRequest) {
       
       // Split on numbers to separate name from loan amounts
       const nameMatch = cleanLine.match(/^([A-Z\s]+?)(?:\d|$)/);
-      if (!nameMatch || !nameMatch[1]) return false;
+      if (!nameMatch?.[1]) return false;
       
       const potentialName = nameMatch[1].trim();
       
@@ -98,7 +98,7 @@ export async function POST(request: NextRequest) {
     }).map(line => {
       // Extract just the name part (before any numbers)
       const nameMatch = line.match(/^([A-Z\s]+?)(?:\d|$)/);
-      return nameMatch && nameMatch[1] ? nameMatch[1].trim() : line.trim();
+      return nameMatch?.[1] ? nameMatch[1].trim() : line.trim();
     });
 
     // Remove duplicates and clean up

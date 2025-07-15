@@ -115,7 +115,7 @@ export async function POST(request: NextRequest) {
       const nameNumberPattern = /^([A-Z][A-Z\s]+?)(\d+)$/;
       const match = line.match(nameNumberPattern);
       
-      if (match && match[1] && match[2]) {
+      if (match?.[1] && match[2]) {
         const name = match[1].trim();
         const amount = parseFloat(match[2]);
         
@@ -141,7 +141,7 @@ export async function POST(request: NextRequest) {
         const spacePattern = /^([A-Z][A-Z\s]+?)\s+(\d+)$/;
         const spaceMatch = line.match(spacePattern);
         
-        if (spaceMatch && spaceMatch[1] && spaceMatch[2]) {
+        if (spaceMatch?.[1] && spaceMatch[2]) {
           const name = spaceMatch[1].trim();
           const amount = parseFloat(spaceMatch[2]);
           
@@ -164,7 +164,7 @@ export async function POST(request: NextRequest) {
           const nameOnlyPattern = /^([A-Z][A-Z\s]{4,45})$/;
           const nameMatch = line.match(nameOnlyPattern);
           
-          if (nameMatch && nameMatch[1]) {
+          if (nameMatch?.[1]) {
             const name = nameMatch[1].trim();
             
             // Check if it looks like a real name

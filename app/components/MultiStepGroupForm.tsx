@@ -122,6 +122,13 @@ const groupSchema = z.object({
   // Group Social Settings
   groupSocialEnabled: z.boolean().optional(),
   groupSocialAmountPerFamilyMember: z.number().nonnegative().optional(),
+  groupSocialPreviousBalance: z.number().nonnegative().optional(),
+  loanInsurancePreviousBalance: z.number().nonnegative().optional(),
+  
+  // Period Tracking Settings
+  includeDataTillCurrentPeriod: z.boolean().optional(),
+  currentPeriodMonth: z.number().int().min(1).max(12).optional(),
+  currentPeriodYear: z.number().int().optional(),
 }).superRefine((data, ctx) => {
   // Conditional validation based on collection frequency
   if (data.collectionFrequency === 'MONTHLY') {
@@ -209,13 +216,17 @@ const groupSchema = z.object({
 type GroupFormValues = z.infer<typeof groupSchema>;
 
 // Define a type for the data structure actually passed to onSubmit
-type GroupSubmissionData = Omit<GroupFormValues, 'dateOfStarting' | 'members'> & {
+type GroupSubmissionData = Omit<GroupFormValues, 'dateOfStarting' | 'members' | 'groupSocialPreviousBalance' | 'loanInsurancePreviousBalance'> & {
   dateOfStarting: string; 
-  collectionFrequency: CollectionFrequency; 
+  collectionFrequency: CollectionFrequency;
+  // New field mappings for API compatibility
+  loanInsuranceBalance?: number;
+  groupSocialBalance?: number;
   members: {
     memberId: string;
     currentShare?: number;
     currentLoanAmount?: number;
+    familyMembersCount?: number;
   }[];
 };
 
@@ -1152,10 +1163,14 @@ The PDF may contain scanned images or use an unsupported format.
         dateOfStarting: (data.dateOfStarting instanceof Date ? data.dateOfStarting.toISOString() : new Date(data.dateOfStarting).toISOString()),
         collectionFrequency: data.collectionFrequency || 'MONTHLY', 
         lateFineRule: transformedLateFineRule, // Use the transformed late fine rule
+        // Send the new field names for balance tracking
+        loanInsuranceBalance: data.loanInsurancePreviousBalance || 0,
+        groupSocialBalance: data.groupSocialPreviousBalance || 0,
         members: data.members.map((m: z.infer<typeof memberDataSchema>) => ({ // Add type for m
           memberId: m.memberId,
           currentShare: data.globalShareAmount || 0, // Apply global share amount to all members
           currentLoanAmount: m.currentLoanAmount || 0, // Ensure currentLoanAmount is always a number
+          familyMembersCount: m.familyMembersCount || 1, // Include family members count
         })),
       };
       
@@ -2869,6 +2884,13 @@ The PDF may contain scanned images or use an unsupported format.
   const watchedGlobalShareAmount = watch('globalShareAmount');
   const watchedInterestRate = watch('interestRate');
   const watchedMonthlyContribution = watch('monthlyContribution');
+  const watchedGroupSocialEnabled = watch('groupSocialEnabled');
+  const watchedGroupSocialAmountPerFamilyMember = watch('groupSocialAmountPerFamilyMember');
+  const watchedLoanInsuranceEnabled = watch('loanInsuranceEnabled');
+  const watchedLoanInsurancePercent = watch('loanInsurancePercent');
+  const watchedGroupSocialPreviousBalance = watch('groupSocialPreviousBalance');
+  const watchedLoanInsurancePreviousBalance = watch('loanInsurancePreviousBalance');
+  const watchedIncludeDataTillCurrentPeriod = watch('includeDataTillCurrentPeriod');
 
   const Step4 = useMemo(() => {
     const memberFieldsData = watchedMembers || []; // Use watched value
@@ -3032,72 +3054,6 @@ The PDF may contain scanned images or use an unsupported format.
             </div>
           </div>
 
-          {/* Loan Insurance Settings */}
-          <div className="bg-yellow-50 dark:bg-yellow-900/20 p-4 rounded-lg border border-yellow-200 dark:border-yellow-800">
-            <h3 className="text-lg font-medium text-yellow-900 dark:text-yellow-100 mb-3">Loan Insurance Settings</h3>
-            <Controller
-              name="loanInsuranceEnabled"
-              control={control}
-              render={({ field }) => (
-                <>
-                  <div className="flex items-center mb-3">
-                    <input
-                      type="checkbox"
-                      id="loanInsuranceEnabled"
-                      checked={field.value || false}
-                      onChange={(e) => {
-                        field.onChange(e.target.checked);
-                      }}
-                      className="mr-2"
-                    />
-                    <label htmlFor="loanInsuranceEnabled" className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                      Enable Loan Insurance System
-                    </label>
-                  </div>
-                  
-                  {/* Use field.value directly instead of useWatch */}
-                  {field.value === true && (
-                    <div className="space-y-4 pl-6 border-l-4 border-yellow-400 dark:border-yellow-500 bg-yellow-50 dark:bg-yellow-800/50 p-4 rounded shadow-sm">
-                      <div className="text-yellow-800 dark:text-yellow-200 font-medium mb-2">
-                        ✅ Loan Insurance Configuration
-                      </div>
-                      <div>
-                        <label htmlFor="loanInsurancePercent" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                          Loan Insurance Rate (% per loan amount) <span className="text-red-500">*</span>
-                        </label>
-                        <Controller
-                          name="loanInsurancePercent"
-                          control={control}
-                          defaultValue={0}
-                          render={({ field: { onChange, onBlur, value, name } }) => (
-                            <input
-                              type="number"
-                              id={name}
-                              value={value || ''}
-                              onChange={e => onChange(parseFloat(e.target.value) || 0)}
-                              onBlur={onBlur}
-                              min="0"
-                              max="100"
-                              step="0.1"
-                              className="mt-1 block w-full max-w-xs px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-yellow-500 focus:border-yellow-500"
-                              placeholder="e.g., 1.5"
-                            />
-                          )}
-                        />
-                        {errors.loanInsurancePercent && (
-                          <p className="mt-1 text-sm text-red-500">{errors.loanInsurancePercent.message}</p>
-                        )}
-                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                          Members with loans will pay this percentage of their loan amount as insurance
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-            />
-          </div>
-
           {/* Group Social Settings */}
           <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg border border-green-200 dark:border-green-800">
             <h3 className="text-lg font-medium text-green-900 dark:text-green-100 mb-3">Group Social Settings</h3>
@@ -3159,6 +3115,252 @@ The PDF may contain scanned images or use an unsupported format.
                             ✅ <strong>Group Social enabled!</strong> Members can set their family size for fair contribution tracking.
                           </p>
                         </div>
+                        {/* Add editable total Group Social amount */}
+                        <div className="mt-4 p-3 bg-green-100 dark:bg-green-900/30 rounded border border-green-200 dark:border-green-800">
+                          <h4 className="text-sm font-medium text-green-800 dark:text-green-200 mb-2">Group Social Fund</h4>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                                Calculated Current Period:
+                              </label>
+                              <p className="text-sm font-medium text-green-700 dark:text-green-300">
+                                ₹{(() => {
+                                  const totalFamilyMembers = memberFieldsData.reduce((sum, member) => {
+                                    return sum + (member.familyMembersCount || 1);
+                                  }, 0);
+                                  return ((watchedGroupSocialAmountPerFamilyMember || 0) * totalFamilyMembers).toFixed(2);
+                                })()}
+                              </p>
+                            </div>
+                            <div>
+                              <label htmlFor="groupSocialPreviousBalance" className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                                Previous Balance (₹):
+                              </label>
+                              <Controller
+                                name="groupSocialPreviousBalance"
+                                control={control}
+                                defaultValue={0}
+                                render={({ field: { onChange, onBlur, value, name } }) => (
+                                  <input
+                                    type="number"
+                                    id={name}
+                                    value={value || ''}
+                                    onChange={e => onChange(parseFloat(e.target.value) || 0)}
+                                    onBlur={onBlur}
+                                    min="0"
+                                    className="input-field-sm"
+                                    placeholder="Previous balance"
+                                  />
+                                )}
+                              />
+                              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                Any previous amount in group social fund (default: 0)
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            />
+          </div>
+
+          {/* Loan Insurance Settings */}
+          <div className="bg-yellow-50 dark:bg-yellow-900/20 p-4 rounded-lg border border-yellow-200 dark:border-yellow-800">
+            <h3 className="text-lg font-medium text-yellow-900 dark:text-yellow-100 mb-3">Loan Insurance Settings</h3>
+            <Controller
+              name="loanInsuranceEnabled"
+              control={control}
+              render={({ field }) => (
+                <>
+                  <div className="flex items-center mb-3">
+                    <input
+                      type="checkbox"
+                      id="loanInsuranceEnabledEnhanced"
+                      checked={field.value || false}
+                      onChange={(e) => {
+                        field.onChange(e.target.checked);
+                      }}
+                      className="mr-2"
+                    />
+                    <label htmlFor="loanInsuranceEnabledEnhanced" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Enable Loan Insurance System
+                    </label>
+                  </div>
+                  
+                  {field.value === true && (
+                    <div className="space-y-4 pl-6 border-l-4 border-yellow-400 dark:border-yellow-500 bg-yellow-50 dark:bg-yellow-800/50 p-4 rounded shadow-sm">
+                      <div className="text-yellow-800 dark:text-yellow-200 font-medium mb-2">
+                        ✅ Loan Insurance Configuration
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label htmlFor="loanInsurancePercent" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                            Loan Insurance Rate (% per loan amount) <span className="text-red-500">*</span>
+                          </label>
+                          <Controller
+                            name="loanInsurancePercent"
+                            control={control}
+                            defaultValue={0}
+                            render={({ field: { onChange, onBlur, value, name } }) => (
+                              <input
+                                type="number"
+                                id={name}
+                                value={value || ''}
+                                onChange={e => onChange(parseFloat(e.target.value) || 0)}
+                                onBlur={onBlur}
+                                min="0"
+                                max="100"
+                                step="0.1"
+                                className="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-yellow-500 focus:border-yellow-500"
+                                placeholder="e.g., 1.5"
+                              />
+                            )}
+                          />
+                          {errors.loanInsurancePercent && (
+                            <p className="mt-1 text-sm text-red-500">{errors.loanInsurancePercent.message}</p>
+                          )}
+                          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                            Members with loans will pay this percentage of their loan amount as insurance
+                          </p>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                            Calculated Total Insurance Amount
+                          </label>
+                          <p className="text-xl font-medium text-yellow-700 dark:text-yellow-300">
+                            ₹{(() => {
+                              const loanInsurancePercent = Number(watchedLoanInsurancePercent) || 0;
+                              return (totalLoanAmount * (loanInsurancePercent / 100)).toFixed(2);
+                            })()}
+                          </p>
+                        </div>
+                      </div>
+                      
+                      {/* Add editable total Loan Insurance amount */}
+                      <div className="mt-4 p-3 bg-yellow-100 dark:bg-yellow-900/30 rounded border border-yellow-200 dark:border-yellow-800">
+                        <h4 className="text-sm font-medium text-yellow-800 dark:text-yellow-200 mb-2">Loan Insurance Fund</h4>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                              Calculated Current Period:
+                            </label>
+                            <p className="text-sm font-medium text-yellow-700 dark:text-yellow-300">
+                              ₹{(() => {
+                                const loanInsurancePercent = Number(watchedLoanInsurancePercent) || 0;
+                                return (totalLoanAmount * (loanInsurancePercent / 100)).toFixed(2);
+                              })()}
+                            </p>
+                          </div>
+                          <div>
+                            <label htmlFor="loanInsurancePreviousBalance" className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                              Previous Balance (₹):
+                            </label>
+                            <Controller
+                              name="loanInsurancePreviousBalance"
+                              control={control}
+                              defaultValue={0}
+                              render={({ field: { onChange, onBlur, value, name } }) => (
+                                <input
+                                  type="number"
+                                  id={name}
+                                  value={value || ''}
+                                  onChange={e => onChange(parseFloat(e.target.value) || 0)}
+                                  onBlur={onBlur}
+                                  min="0"
+                                  className="input-field-sm"
+                                  placeholder="Previous balance"
+                                />
+                              )}
+                            />
+                            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                              Any previous amount in loan insurance fund (default: 0)
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            />
+          </div>
+
+          {/* Period Tracking Settings */}
+          <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg border border-blue-200 dark:border-blue-800">
+            <h3 className="text-lg font-medium text-blue-900 dark:text-blue-100 mb-3">Period Tracking Settings</h3>
+            <Controller
+              name="includeDataTillCurrentPeriod"
+              control={control}
+              render={({ field }) => (
+                <>
+                  <div className="flex items-center mb-3">
+                    <input
+                      type="checkbox"
+                      id="includeDataTillCurrentPeriod"
+                      checked={field.value || false}
+                      onChange={(e) => {
+                        field.onChange(e.target.checked);
+                        if (e.target.checked) {
+                          // Set current period to next month for contribution tracking
+                          const currentDate = new Date();
+                          const nextMonth = currentDate.getMonth() + 2; // +2 because getMonth() is 0-based, and we want next month
+                          const nextYear = nextMonth > 12 ? currentDate.getFullYear() + 1 : currentDate.getFullYear();
+                          const adjustedMonth = nextMonth > 12 ? 1 : nextMonth;
+                          
+                          setValue('currentPeriodMonth', adjustedMonth);
+                          setValue('currentPeriodYear', adjustedMonth === 1 ? nextYear : currentDate.getFullYear());
+                        } else {
+                          // Set current period to current month
+                          const currentDate = new Date();
+                          setValue('currentPeriodMonth', currentDate.getMonth() + 1);
+                          setValue('currentPeriodYear', currentDate.getFullYear());
+                        }
+                      }}
+                      className="mr-2 h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                    />
+                    <label htmlFor="includeDataTillCurrentPeriod" className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                      Include historical data till current period
+                    </label>
+                  </div>
+                  
+                  {field.value && (
+                    <div className="mt-4 p-3 bg-blue-100 dark:bg-blue-900/30 rounded border border-blue-200 dark:border-blue-800">
+                      <div className="mb-3">
+                        <p className="text-sm text-blue-800 dark:text-blue-200">
+                          <strong>Current Period for Contribution Tracking:</strong> {(() => {
+                            const currentDate = new Date();
+                            const nextMonth = currentDate.getMonth() + 2;
+                            const nextYear = nextMonth > 12 ? currentDate.getFullYear() + 1 : currentDate.getFullYear();
+                            const adjustedMonth = nextMonth > 12 ? 1 : nextMonth;
+                            const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
+                              'July', 'August', 'September', 'October', 'November', 'December'];
+                            return `${monthNames[adjustedMonth - 1]} ${adjustedMonth === 1 ? nextYear : currentDate.getFullYear()}`;
+                          })()}
+                        </p>
+                        <p className="text-xs text-blue-600 dark:text-blue-300 mt-1">
+                          Since you're including data till current period, contribution tracking will start from the next period.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {!field.value && (
+                    <div className="mt-4 p-3 bg-blue-100 dark:bg-blue-900/30 rounded border border-blue-200 dark:border-blue-800">
+                      <div className="mb-3">
+                        <p className="text-sm text-blue-800 dark:text-blue-200">
+                          <strong>Current Period for Contribution Tracking:</strong> {(() => {
+                            const currentDate = new Date();
+                            const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
+                              'July', 'August', 'September', 'October', 'November', 'December'];
+                            return `${monthNames[currentDate.getMonth()]} ${currentDate.getFullYear()}`;
+                          })()}
+                        </p>
+                        <p className="text-xs text-blue-600 dark:text-blue-300 mt-1">
+                          Contribution tracking will start from the current period.
+                        </p>
                       </div>
                     </div>
                   )}
@@ -3350,10 +3552,186 @@ The PDF may contain scanned images or use an unsupported format.
 
             </div>
           </div>
+
+          {/* New Auto-Calculated Summary - Show only if GS or LI are enabled */}
+          {(watchedGroupSocialEnabled || watchedLoanInsuranceEnabled) && (
+            <div className="bg-gradient-to-br from-indigo-50 to-indigo-100 dark:from-indigo-900/20 dark:to-indigo-800/20 p-4 rounded-lg border border-indigo-200 dark:border-indigo-700">
+              <h3 className="text-lg font-medium text-indigo-900 dark:text-indigo-100 mb-3">Auto-Calculated Summary</h3>
+              <div className="space-y-3 text-sm">
+                {(() => {
+                  // Calculate enhanced totals
+                  const loanInsurancePercent = Number(watchedLoanInsurancePercent) || 0;
+                  const groupSocialPerFamily = Number(watchedGroupSocialAmountPerFamilyMember) || 0;
+                  
+                  // Calculate late fine (simplified for creation - actual calculation depends on overdue days)
+                  const estimatedLateFine = 0; // For creation, this would be 0
+                  
+                  // Calculate loan insurance amount - current period calculation plus previous balance
+                  const calculatedLoanInsuranceAmount = watchedLoanInsuranceEnabled ? 
+                    roundToTwoDecimals(totalLoanAmount * (loanInsurancePercent / 100)) : 0;
+                  const loanInsurancePreviousBalance = Number(watch('loanInsurancePreviousBalance')) || 0;
+                  const totalLoanInsuranceFund = calculatedLoanInsuranceAmount + loanInsurancePreviousBalance;
+                  
+                  // Calculate group social amount - current period calculation plus previous balance
+                  const totalFamilyMembers = memberFieldsData.reduce((sum, member) => {
+                    return sum + (member.familyMembersCount || 1);
+                  }, 0);
+                  const calculatedGroupSocialAmount = watchedGroupSocialEnabled ? 
+                    roundToTwoDecimals(totalFamilyMembers * groupSocialPerFamily) : 0;
+                  const groupSocialPreviousBalance = Number(watch('groupSocialPreviousBalance')) || 0;
+                  const totalGroupSocialFund = calculatedGroupSocialAmount + groupSocialPreviousBalance;
+                  
+                  // Calculate interest paid on personal loans
+                  const interestPaidOnPersonalLoans = interestRate > 0 && totalLoanAmount > 0 ? 
+                    roundToTwoDecimals((totalLoanAmount * (interestRate / 100)) / 12) : 0;
+                  
+                  // Calculate Total Collection as per new formula
+                  const totalCollection = roundToTwoDecimals(
+                    totalMonthlyCollection + 
+                    estimatedLateFine + 
+                    interestPaidOnPersonalLoans + 
+                    calculatedLoanInsuranceAmount + 
+                    calculatedGroupSocialAmount
+                  );
+                  
+                  // Calculate TOTAL Group Standing with new formula
+                  // STANDING = [(Previous Month Balance + Total Collection + Interest Income − Expenses) + Remaining Personal Loan Amount] − Group Social Fund − Loan Insurance Fund
+                  const previousMonthBalance = currentCashInHand + currentBalanceInBank;
+                  const interestIncome = interestPaidOnPersonalLoans; // Same as interest paid
+                  const expenses = 0; // For creation, assume no expenses
+                  const remainingPersonalLoanAmount = totalLoanAmount;
+                  
+                  const totalGroupStanding = roundToTwoDecimals(
+                    (previousMonthBalance + totalCollection + interestIncome - expenses) + 
+                    remainingPersonalLoanAmount - 
+                    totalGroupSocialFund - 
+                    totalLoanInsuranceFund
+                  );
+                  
+                  return (
+                    <>
+                      <div className="bg-white dark:bg-indigo-900/30 p-3 rounded border border-indigo-200 dark:border-indigo-700">
+                        <h4 className="font-medium text-indigo-800 dark:text-indigo-200 mb-2">Total Collection Breakdown</h4>
+                        <div className="space-y-1 text-xs">
+                          <div className="flex justify-between">
+                            <span>Monthly Compulsory Contribution:</span>
+                            <span>₹{totalMonthlyCollection.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Late Fine:</span>
+                            <span>₹{estimatedLateFine.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Interest Paid (Personal Loans):</span>
+                            <span>₹{interestPaidOnPersonalLoans.toFixed(2)}</span>
+                          </div>
+                          {watchedLoanInsuranceEnabled && (
+                            <div className="flex justify-between">
+                              <span>Loan Insurance ({loanInsurancePercent}%):</span>
+                              <span>₹{calculatedLoanInsuranceAmount.toFixed(2)}</span>
+                            </div>
+                          )}
+                          {watchedGroupSocialEnabled && (
+                            <div className="flex justify-between">
+                              <span>Group Social ({totalFamilyMembers} family members):</span>
+                              <span>₹{calculatedGroupSocialAmount.toFixed(2)}</span>
+                            </div>
+                          )}
+                          <hr className="border-indigo-200 dark:border-indigo-600" />
+                          <div className="flex justify-between font-semibold">
+                            <span>Total Collection:</span>
+                            <span>₹{totalCollection.toFixed(2)}</span>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="bg-white dark:bg-indigo-900/30 p-3 rounded border border-indigo-200 dark:border-indigo-700">
+                        <h4 className="font-medium text-indigo-800 dark:text-indigo-200 mb-2">TOTAL Group Standing</h4>
+                        <div className="space-y-1 text-xs">
+                          <div className="flex justify-between">
+                            <span>Previous Month Balance:</span>
+                            <span>₹{previousMonthBalance.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Total Collection:</span>
+                            <span>₹{totalCollection.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Interest Income:</span>
+                            <span>₹{interestIncome.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Expenses:</span>
+                            <span>-₹{expenses.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Remaining Personal Loan Amount:</span>
+                            <span>₹{remainingPersonalLoanAmount.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between text-red-600 dark:text-red-400">
+                            <span>Total Group Social Fund:</span>
+                            <span>-₹{totalGroupSocialFund.toFixed(2)}</span>
+                          </div>
+                          <div className="flex justify-between text-red-600 dark:text-red-400">
+                            <span>Total Loan Insurance Fund:</span>
+                            <span>-₹{totalLoanInsuranceFund.toFixed(2)}</span>
+                          </div>
+                          <hr className="border-indigo-200 dark:border-indigo-600" />
+                          <div className="flex justify-between font-semibold text-indigo-800 dark:text-indigo-200">
+                            <span>TOTAL Group Standing:</span>
+                            <span>₹{totalGroupStanding.toFixed(2)}</span>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="bg-white dark:bg-indigo-900/30 p-3 rounded border border-indigo-200 dark:border-indigo-700">
+                        <h4 className="font-medium text-indigo-800 dark:text-indigo-200 mb-2">Fund Details</h4>
+                        <div className="space-y-1 text-xs">
+                          {watchedLoanInsuranceEnabled && (
+                            <>
+                              <div className="flex justify-between">
+                                <span>Previous LI Fund Balance:</span>
+                                <span>₹{loanInsurancePreviousBalance.toFixed(2)}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span>Current Period LI:</span>
+                                <span>₹{calculatedLoanInsuranceAmount.toFixed(2)}</span>
+                              </div>
+                              <div className="flex justify-between font-medium text-yellow-700 dark:text-yellow-300">
+                                <span>Total LI Fund:</span>
+                                <span>₹{totalLoanInsuranceFund.toFixed(2)}</span>
+                              </div>
+                              <hr className="border-indigo-200 dark:border-indigo-600" />
+                            </>
+                          )}
+                          {watchedGroupSocialEnabled && (
+                            <>
+                              <div className="flex justify-between">
+                                <span>Previous GS Fund Balance:</span>
+                                <span>₹{groupSocialPreviousBalance.toFixed(2)}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span>Current Period GS:</span>
+                                <span>₹{calculatedGroupSocialAmount.toFixed(2)}</span>
+                              </div>
+                              <div className="flex justify-between font-medium text-green-700 dark:text-green-300">
+                                <span>Total Group Social Fund:</span>
+                                <span>₹{totalGroupSocialFund.toFixed(2)}</span>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
-  }, [watchedCashInHand, watchedBalanceInBank, watchedGlobalShareAmount, watchedMembers, collectionFrequency, watchedInterestRate, watchedMonthlyContribution, control, errors, memberFields, getShareLabel, setValue]); // Dependencies for useMemo
+  }, [watchedCashInHand, watchedBalanceInBank, watchedGlobalShareAmount, watchedMembers, collectionFrequency, watchedInterestRate, watchedMonthlyContribution, watchedGroupSocialEnabled, watchedGroupSocialAmountPerFamilyMember, watchedLoanInsuranceEnabled, watchedLoanInsurancePercent, watchedGroupSocialPreviousBalance, watchedLoanInsurancePreviousBalance, watchedIncludeDataTillCurrentPeriod, control, errors, memberFields, getShareLabel, setValue, watch]); // Dependencies for useMemo
 
   // Duplicate function removed - using definition above
 

@@ -9,10 +9,13 @@
     "lint": "next lint",
     "migrate": "node migrate.js",
     "reset": "node reset.js",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "dev:performance": "NODE_ENV=development ENABLE_PERFORMANCE_LOGGING=true next dev",
+    "dev:quiet": "NODE_ENV=development ENABLE_VERBOSE_LOGGING=false next dev"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.9.1",
+    "@hello-pangea/dnd": "^18.0.1",
     "@heroicons/react": "^2.2.0",
     "@hookform/resolvers": "^5.0.1",
     "@node-rs/bcrypt": "^1.10.7",
@@ -40,7 +43,6 @@
     "pdf-parse": "^1.1.1",
     "pdf2json": "^3.1.6",
     "pdfjs-dist": "^5.3.31",
-    "playwright": "^1.53.0",
     "prisma": "^6.7.0",
     "puppeteer": "^24.10.1",
     "react": "^19.0.0",
@@ -61,6 +63,7 @@
     "copy-webpack-plugin": "^13.0.0",
     "eslint": "^9",
     "eslint-config-next": "15.3.1",
+    "playwright": "^1.53.2",
     "tailwindcss": "^4",
     "ts-node": "^10.9.2",
     "typescript": "^5"

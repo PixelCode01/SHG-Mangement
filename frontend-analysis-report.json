@@ -1,0 +1,104 @@
+{
+  "issues": [
+    {
+      "type": "CSP Configuration",
+      "severity": "HIGH",
+      "description": "CSP script-src directive is too restrictive",
+      "rootCause": "Missing Vercel domains in script-src"
+    },
+    {
+      "type": "Vercel Integration",
+      "severity": "MEDIUM",
+      "description": "Vercel Analytics/Speed Insights causing CSP violations in development",
+      "rootCause": "External script loading blocked by browser or development environment"
+    },
+    {
+      "error": "Refused to load the script 'https://va.vercel-scripts.com/v1/speed-insights/script.debug.js'",
+      "type": "CSP Violation",
+      "severity": "MEDIUM",
+      "component": "Vercel Speed Insights"
+    },
+    {
+      "error": "Refused to load the script 'https://va.vercel-scripts.com/v1/script.debug.js'",
+      "type": "CSP Violation",
+      "severity": "MEDIUM",
+      "component": "Vercel Analytics"
+    },
+    {
+      "error": "[Vercel Speed Insights] Failed to load script",
+      "type": "Script Loading Failure",
+      "severity": "LOW",
+      "component": "Vercel Speed Insights"
+    },
+    {
+      "error": "[Vercel Web Analytics] Failed to load script",
+      "type": "Script Loading Failure",
+      "severity": "LOW",
+      "component": "Vercel Analytics"
+    },
+    {
+      "error": "Download the React DevTools for a better development experience",
+      "type": "Development Warning",
+      "severity": "LOW",
+      "component": "React DevTools"
+    },
+    {
+      "error": "The resource was preloaded using link preload but not used within a few seconds",
+      "type": "Performance Warning",
+      "severity": "LOW",
+      "component": "Resource Preloading"
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Fix CSP for Vercel Scripts",
+      "priority": "HIGH",
+      "description": "Update Content Security Policy to explicitly allow Vercel domains",
+      "implementation": "Update next.config.ts CSP directive",
+      "code": "\n// In next.config.ts - replace the CSP value with:\nvalue: \"default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://va.vercel-scripts.com; worker-src * blob: data:; style-src * 'unsafe-inline'; img-src * data: blob:; font-src *; connect-src *; frame-ancestors 'none';\"\n    "
+    },
+    {
+      "title": "Conditional Vercel Integration Loading",
+      "priority": "MEDIUM",
+      "description": "Load Vercel Analytics only in production to avoid development issues",
+      "implementation": "Wrap Vercel components with environment check",
+      "code": "\n// In app/layout.tsx:\n{process.env.NODE_ENV === 'production' && <SpeedInsights />}\n{process.env.NODE_ENV === 'production' && <Analytics />}\n    "
+    },
+    {
+      "title": "Optimize Resource Preloading",
+      "priority": "LOW",
+      "description": "Remove unused preload resources to eliminate warnings",
+      "implementation": "Audit and remove unnecessary link preload tags",
+      "code": "\n// Remove unused preload links from layout or components\n// Only preload resources that are actually used immediately\n    "
+    },
+    {
+      "title": "Add Error Boundary for Better Error Handling",
+      "priority": "MEDIUM",
+      "description": "Implement error boundaries to catch and handle submission errors gracefully",
+      "implementation": "Create React Error Boundary component",
+      "code": "\n// Create app/components/ErrorBoundary.tsx\nclass ErrorBoundary extends React.Component {\n  constructor(props) {\n    super(props);\n    this.state = { hasError: false };\n  }\n  \n  static getDerivedStateFromError(error) {\n    return { hasError: true };\n  }\n  \n  componentDidCatch(error, errorInfo) {\n    console.error('Payment submission error:', error, errorInfo);\n  }\n  \n  render() {\n    if (this.state.hasError) {\n      return <div>Something went wrong with the payment submission.</div>;\n    }\n    return this.props.children;\n  }\n}\n    "
+    }
+  ],
+  "recommendations": [
+    {
+      "category": "Security",
+      "suggestion": "Implement strict CSP in production while allowing development flexibility",
+      "impact": "Improves security without breaking development workflow"
+    },
+    {
+      "category": "Performance",
+      "suggestion": "Add loading states and optimistic updates for better UX",
+      "impact": "Users get immediate feedback on payment submissions"
+    },
+    {
+      "category": "Monitoring",
+      "suggestion": "Add proper error tracking for payment submissions",
+      "impact": "Better debugging and user support for payment issues"
+    },
+    {
+      "category": "Development",
+      "suggestion": "Create development-specific configuration to reduce console noise",
+      "impact": "Cleaner development experience and easier debugging"
+    }
+  ]
+}

@@ -6,6 +6,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'; // Added useCa
 import { useTheme } from 'next-themes';
 import { SunIcon, MoonIcon, UserCircleIcon } from '@heroicons/react/24/outline';
 import { useSession, signOut } from 'next-auth/react';
+import { rateLogger, devConsole } from '../utils/performance';
 
 // Define the extended Session User type
 interface ExtendedUser {
@@ -76,12 +77,12 @@ export default function Navigation() {
     const fetchGroups = async () => {
       setLoadingGroups(true);
       try {
-        console.log('[Navigation] Fetching groups from API');
+        devConsole.log('[Navigation] Fetching groups from API');
         const response = await fetch('/api/groups');
         
         if (response.ok) {
           const groups: NavGroup[] = await response.json();
-          console.log(`[Navigation] Received ${groups.length} groups from API`);
+          devConsole.log(`[Navigation] Received ${groups.length} groups from API`);
           setFirstGroupId(groups.length > 0 && groups[0] ? groups[0].id : null);
         } else {
           const errorText = await response.text();
@@ -109,17 +110,13 @@ export default function Navigation() {
       (pathname?.includes('/groups') && (pathname.includes('/create') || pathname.includes('/edit')));
       
     if (shouldRefetch) {
-      console.log('[Navigation] Fetching groups data');
+      // Only log in development mode to reduce console spam
+      devConsole.log('[Navigation] Fetching groups data');
       fetchGroups();
       sessionStorage.setItem('nav-groups-last-fetch', Date.now().toString());
     } else {
-      // Only log this occasionally to reduce console spam
-      const lastLogTime = sessionStorage.getItem('nav-cache-log-time');
-      const now = Date.now();
-      if (!lastLogTime || now - parseInt(lastLogTime) > 5000) { // Log every 5 seconds max
-        console.log('[Navigation] Using cached group data');
-        sessionStorage.setItem('nav-cache-log-time', now.toString());
-      }
+      // Reduce logging frequency - only log once per minute in development
+      rateLogger.log('nav-cache', '[Navigation] Using cached group data');
     }
   }, [status, pathname, session?.user]); // Include session?.user dependency
 
@@ -151,21 +148,21 @@ export default function Navigation() {
   useEffect(() => {
     // Only log if the status or user has actually changed
     if (prevStatus.current !== status || prevUserId.current !== session?.user?.id) {
-      console.log('[Navigation] Authentication status changed:', status);
+      devConsole.log('[Navigation] Authentication status changed:', status);
       
       if (status === 'authenticated' && session?.user) {
-        console.log('[Navigation] User authenticated:', session.user.name);
+        devConsole.log('[Navigation] User authenticated:', session.user.name);
         localStorage.setItem('auth-status', 'authenticated');
         localStorage.setItem('auth-timestamp', new Date().toISOString());
         setUserMenuOpen(false);
       } else if (status === 'unauthenticated') {
-        console.log('[Navigation] User is not authenticated');
+        devConsole.log('[Navigation] User is not authenticated');
         localStorage.removeItem('auth-status');
         localStorage.removeItem('auth-timestamp');
         setFirstGroupId(null);
         setUserMenuOpen(false);
       } else if (status === 'loading') {
-        console.log('[Navigation] Session is loading...');
+        devConsole.log('[Navigation] Session is loading...');
       }
       
       // Update previous values
@@ -219,7 +216,7 @@ export default function Navigation() {
   const actionItems = getActionItems();
 
   const handleLogout = async () => {
-    console.log('[Navigation] Logging out user');
+    devConsole.log('[Navigation] Logging out user');
     
     try {
       // Clear authentication status from localStorage before sign out
@@ -232,7 +229,7 @@ export default function Navigation() {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' }
       });
-      console.log('[Navigation] Session clear response:', clearResponse.status);
+      devConsole.log('[Navigation] Session clear response:', clearResponse.status);
       
       // Then use signOut to clear client-side session
       await signOut({ redirect: false });
@@ -241,7 +238,7 @@ export default function Navigation() {
       setFirstGroupId(null);
       setUserMenuOpen(false);
       
-      console.log('[Navigation] Session cleared, redirecting to login page');
+      devConsole.log('[Navigation] Session cleared, redirecting to login page');
       
       // For Next.js 13+, using router.push() followed by window.location
       // is the most reliable way to ensure a complete navigation with session refresh
@@ -249,7 +246,7 @@ export default function Navigation() {
       
       // Use window.location after a small delay to ensure complete session refresh
       setTimeout(() => {
-        console.log('[Navigation] Performing hard redirect to login page');
+        devConsole.log('[Navigation] Performing hard redirect to login page');
         window.location.href = '/login';
       }, 100);
     } catch (error) {
@@ -315,7 +312,7 @@ export default function Navigation() {
                     onClick={(e) => {
                       e.stopPropagation();
                       setUserMenuOpen(!userMenuOpen);
-                      console.log('[Navigation] User menu toggled:', !userMenuOpen);
+                      devConsole.log('[Navigation] User menu toggled:', !userMenuOpen);
                     }}
                     className="flex items-center space-x-1 rounded-full bg-secondary px-3 py-1.5 hover:bg-secondary/80 transition-colors"
                   >

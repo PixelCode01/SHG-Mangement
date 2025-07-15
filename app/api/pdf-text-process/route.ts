@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
       
       // Look for patterns where name and amount might be joined
       const nameAmountMatch = line.match(/^([A-Za-z\s]+?)(\d+)$/);
-      if (nameAmountMatch && nameAmountMatch[1] && nameAmountMatch[2]) {
+      if (nameAmountMatch?.[1] && nameAmountMatch[2]) {
         const name = nameAmountMatch[1].trim();
         const amount = nameAmountMatch[2].trim();
         

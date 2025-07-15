@@ -343,7 +343,7 @@ function extractFromCleanText(text: string): ParsedMember[] {
     const nameAmountPattern = /^([A-Z][A-Z\s]+?)(\d+)$/;
     const match = line.match(nameAmountPattern);
     
-    if (match && match[1] && match[2]) {
+    if (match?.[1] && match[2]) {
       const name = match[1].trim();
       const loanAmount = parseInt(match[2], 10);
       
@@ -367,7 +367,7 @@ function extractFromCleanText(text: string): ParsedMember[] {
     const spacePattern = /^([A-Z][A-Z\s]+?)\s+(\d+)$/;
     const spaceMatch = line.match(spacePattern);
     
-    if (spaceMatch && spaceMatch[1] && spaceMatch[2]) {
+    if (spaceMatch?.[1] && spaceMatch[2]) {
       const name = spaceMatch[1].trim();
       const loanAmount = parseInt(spaceMatch[2], 10);
       
@@ -466,7 +466,7 @@ function extractFromPDFBinary(pdfText: string): ParsedMember[] {
             const nameAmountPattern = /^([A-Z][A-Z\s]+?)(\d+)$/;
             const nameMatch = extractedText.match(nameAmountPattern);
             
-            if (nameMatch && nameMatch[1] && nameMatch[2]) {
+            if (nameMatch?.[1] && nameMatch[2]) {
               const name = nameMatch[1].trim();
               const loanAmount = parseInt(nameMatch[2], 10);
               
@@ -514,7 +514,7 @@ function extractFromPDFBinary(pdfText: string): ParsedMember[] {
               const nameAmountPattern = /^([A-Z][A-Z\s]+?)(\d+)$/;
               const nameMatch = combinedText.match(nameAmountPattern);
               
-              if (nameMatch && nameMatch[1] && nameMatch[2]) {
+              if (nameMatch?.[1] && nameMatch[2]) {
                 const name = nameMatch[1].trim();
                 const loanAmount = parseInt(nameMatch[2], 10);
                 
@@ -562,7 +562,7 @@ function extractFromPDFBinary(pdfText: string): ParsedMember[] {
         const nameAmountPattern = /^([A-Z][A-Z\s]+?)(\d+)$/;
         const nameMatch = potentialText.match(nameAmountPattern);
         
-        if (nameMatch && nameMatch[1] && nameMatch[2]) {
+        if (nameMatch?.[1] && nameMatch[2]) {
           const name = nameMatch[1].trim();
           const loanAmount = parseInt(nameMatch[2], 10);
           

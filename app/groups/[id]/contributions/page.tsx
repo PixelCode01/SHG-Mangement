@@ -3,16 +3,17 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams } from 'next/navigation';
 import { useSession } from 'next-auth/react';
+import { devConsole, rateLogger } from '../../../utils/performance';
 import Link from 'next/link';
+import DatePicker from 'react-datepicker';
+import 'react-datepicker/dist/react-datepicker.css';
 import { calculatePeriodInterestFromDecimal } from '@/app/lib/interest-utils';
 import { roundToTwoDecimals, formatCurrency } from '@/app/lib/currency-utils';
 
 // Type declaration for jspdf-autotable
 declare module 'jspdf' {
   interface jsPDF {
-    lastAutoTable: {
-      finalY: number;
-    };
+    // ...existing code...
   }
 }
 
@@ -223,6 +224,7 @@ export default function ContributionTrackingPage() {
     daysLate?: number;
   } | null>(null);
   const [paymentAmount, setPaymentAmount] = useState('');
+  const [submissionDate, setSubmissionDate] = useState<Date>(new Date()); // New state for submission date
   const [contributionAllocation, setContributionAllocation] = useState({
     cashInHand: 0,
     cashInBank: 0
@@ -243,6 +245,7 @@ export default function ContributionTrackingPage() {
     loanInsurancePaid: number;
     groupSocialPaid: number;
     remainingLoan: number;
+    submissionDate: Date; // Added submission date for each member
   }>>({});
 
   useEffect(() => {
@@ -303,17 +306,17 @@ export default function ContributionTrackingPage() {
       setGroup(groupData);
       
       // Fetch current period information
-      console.log('📋 [FETCH DATA] Fetching current period...');
+      devConsole.log('📋 [FETCH DATA] Fetching current period...');
       try {
         const periodResponse = await fetch(`/api/groups/${groupId}/contributions/periods/current`);
-        console.log('📋 [FETCH DATA] Current period API response status:', periodResponse.status);
+        devConsole.log('📋 [FETCH DATA] Current period API response status:', periodResponse.status);
         
         if (periodResponse.ok) {
           const periodData = await periodResponse.json();
-          console.log('📋 [FETCH DATA] Current period API response data:', periodData);
+          devConsole.log('📋 [FETCH DATA] Current period API response data:', periodData);
           
           if (periodData.period) {
-            console.log('📋 [FETCH DATA] Setting current period:', {
+            devConsole.log('📋 [FETCH DATA] Setting current period:', {
               id: periodData.period.id,
               startDate: periodData.period.startDate,
               periodNumber: periodData.period.periodNumber,
@@ -322,18 +325,18 @@ export default function ContributionTrackingPage() {
             setCurrentPeriod(periodData.period);
           } else {
             // No current period exists, create one
-            console.log('📋 [FETCH DATA] No current period found, creating a new one...');
+            devConsole.log('📋 [FETCH DATA] No current period found, creating a new one...');
             await createNewPeriod(groupData);
           }
         } else {
           // API error, try to create a new period
-          console.log('📋 [FETCH DATA] Period API error, attempting to create a new one...');
+          devConsole.log('📋 [FETCH DATA] Period API error, attempting to create a new one...');
           const errorText = await periodResponse.text();
-          console.log('📋 [FETCH DATA] Error details:', errorText);
+          devConsole.log('📋 [FETCH DATA] Error details:', errorText);
           await createNewPeriod(groupData);
         }
       } catch (_err) {
-        console.log('📋 [FETCH DATA] Exception fetching period, creating a new one...', _err);
+        devConsole.log('📋 [FETCH DATA] Exception fetching period, creating a new one...', _err);
         await createNewPeriod(groupData);
       }
       
@@ -414,17 +417,16 @@ export default function ContributionTrackingPage() {
   // Calculate member contributions when both group and currentPeriod are available
   useEffect(() => {
     if (group && currentPeriod && Object.keys(actualContributions).length >= 0) {
-      console.log('🧮 [CONTRIBUTIONS CALC] Recalculating member contributions with period data');
-      console.log('🧮 [CONTRIBUTIONS CALC] Current Period:', currentPeriod);
-      console.log('🧮 [CONTRIBUTIONS CALC] Group data available:', !!group);
-      
       const calculatedContributions = calculateMemberContributions(group, actualContributions);
       setMemberContributions(calculatedContributions);
 
-      // Initialize member collections state for new members
+      // Initialize member collections state for new members (only if they don't exist)
       const initialCollections: Record<string, any> = {};
+      let hasNewMembers = false;
+      
       calculatedContributions.forEach((contribution: any) => {
         if (!memberCollections[contribution.memberId]) {
+          hasNewMembers = true;
           initialCollections[contribution.memberId] = {
             cashAmount: 0,
             bankAmount: 0,
@@ -432,16 +434,19 @@ export default function ContributionTrackingPage() {
             interestPaid: 0,
             loanRepayment: 0,
             lateFinePaid: 0,
-            remainingLoan: contribution.currentLoanBalance || 0
+            loanInsurancePaid: 0,
+            groupSocialPaid: 0,
+            remainingLoan: contribution.currentLoanBalance || 0,
+            submissionDate: new Date() // Add submission date with default value
           };
         }
       });
 
-      if (Object.keys(initialCollections).length > 0) {
+      if (hasNewMembers && Object.keys(initialCollections).length > 0) {
         setMemberCollections((prev: any) => ({ ...prev, ...initialCollections }));
       }
     }
-  }, [group, currentPeriod, actualContributions, memberCollections]);
+  }, [group, currentPeriod, actualContributions]); // Remove memberCollections to prevent infinite loop
 
   // Calculate the next due date based on collection frequency
   const calculateNextDueDate = (groupData: GroupData): Date => {
@@ -529,7 +534,7 @@ export default function ContributionTrackingPage() {
     const today = new Date();
     const frequency = groupData.collectionFrequency || 'MONTHLY';
     
-    console.log(`🔍 [DUE DATE CALCULATION] Starting calculation:`, {
+    rateLogger.log('due-date-calc', `🔍 [DUE DATE CALCULATION] Starting calculation:`, {
       frequency,
       activePeriod: activePeriod ? {
         id: activePeriod.id,
@@ -604,9 +609,10 @@ export default function ContributionTrackingPage() {
       case 'MONTHLY': {
         const targetDay = groupData.collectionDayOfMonth || 1;
         
-        console.log(`🔍 [DUE DATE DEBUG] Monthly calculation started:`);
-        console.log(`   Target Day: ${targetDay}`);
-        console.log(`   Active Period:`, activePeriod);
+        rateLogger.log('monthly-calc', `🔍 [DUE DATE DEBUG] Monthly calculation:`, {
+          targetDay,
+          activePeriod
+        });
         
         // **FIX: Use active period's month instead of current calendar month**
         if (activePeriod && activePeriod.startDate) {
@@ -622,11 +628,12 @@ export default function ContributionTrackingPage() {
             dueDate = new Date(periodYear, periodMonth + 1, 0); // Last day of period month
           }
           
-          console.log(`🔍 [DUE DATE FIX] Using active period month for due date calculation:`);
-          console.log(`   Active Period: ${periodDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`);
-          console.log(`   Target Day: ${targetDay}`);
-          console.log(`   Calculated Due Date: ${dueDate.toDateString()}`);
-          
+          if (process.env.NODE_ENV === 'development') {
+            console.log(`🔍 [DUE DATE FIX] Using active period month for due date calculation:`);
+            console.log(`   Active Period: ${periodDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`);
+            console.log(`   Target Day: ${targetDay}`);
+            console.log(`   Calculated Due Date: ${dueDate.toDateString()}`);
+          }
           return dueDate;
         }
         
@@ -641,11 +648,12 @@ export default function ContributionTrackingPage() {
           dueDate = new Date(currentYear, currentMonth + 1, 0); // Last day of current month
         }
         
-        console.log(`⚠️ [DUE DATE FALLBACK] No active period info, using current month:`);
-        console.log(`   Current Month: ${today.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`);
-        console.log(`   Fallback Due Date: ${dueDate.toDateString()}`);
-        console.log(`   This is likely causing the incorrect overdue calculation!`);
-        
+        if (process.env.NODE_ENV === 'development') {
+          console.log(`⚠️ [DUE DATE FALLBACK] No active period info, using current month:`);
+          console.log(`   Current Month: ${today.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`);
+          console.log(`   Fallback Due Date: ${dueDate.toDateString()}`);
+          console.log(`   This is likely causing the incorrect overdue calculation!`);
+        }
         return dueDate;
       }
       
@@ -792,16 +800,85 @@ export default function ContributionTrackingPage() {
         paidAmount = roundToTwoDecimals(actualContribution.totalPaid || 0);
         lastPaymentDate = actualContribution.paidDate;
         
+        // � CRITICAL FIX: Use API status directly when available
+        // The backend determines the authoritative status based on business rules
+        if (actualContribution.status) {
+          status = actualContribution.status;
+          
+          // For API-determined PAID status, trust the backend calculation
+          if (status === 'PAID') {
+            // Override frontend calculation with API's determination
+            // This ensures frontend matches backend business logic
+            const apiRemainingAmount = actualContribution.remainingAmount || 0;
+            
+            // 🔍 DEBUG: Log API vs Frontend discrepancy resolution
+            if (process.env.NODE_ENV === 'development' && member.name.includes('AISHWARYA')) {
+              console.log('🔧 [STATUS FIX] Using API status for', member.name, {
+                apiStatus: actualContribution.status,
+                apiRemainingAmount,
+                frontendTotalExpected: totalExpected,
+                frontendPaidAmount: paidAmount,
+                frontendCalculatedRemaining: totalExpected - paidAmount,
+                statusSource: 'API_AUTHORITATIVE'
+              });
+            }
+            
+            // When API says PAID, respect that determination
+            return {
+              memberId: member.id,
+              memberName: member.name,
+              expectedContribution: roundToTwoDecimals(expectedContribution),
+              expectedInterest,
+              currentLoanBalance: roundToTwoDecimals(currentLoanBalance),
+              lateFineAmount,
+              daysLate,
+              dueDate: currentPeriodDueDate,
+              totalExpected: paidAmount, // Use paid amount as total when PAID
+              paidAmount,
+              remainingAmount: 0, // API says it's paid, so remaining is 0
+              status: 'PAID',
+              lastPaymentDate,
+              loanInsuranceAmount,
+              groupSocialAmount,
+            } as MemberContributionStatus;
+          }
+        }
+        
+        // �🔍 DEBUG: Log payment calculation details for non-PAID statuses
+        if (process.env.NODE_ENV === 'development' && member.name.includes('AISHWARYA')) {
+          console.log('🔍 [STATUS DEBUG] Payment calculation for', member.name, {
+            totalExpected,
+            paidAmount,
+            actualContribution,
+            expectedContribution,
+            lateFineAmount,
+            groupSocialAmount,
+            loanInsuranceAmount
+          });
+        }
+        
         // Calculate remaining amount first to ensure accurate status
         const remainingAmountRaw = totalExpected - paidAmount;
         
-        // Determine status based on actual payment with better precision handling
-        if (remainingAmountRaw <= 0.01) { // Allow for small rounding errors (1 cent)
-          status = 'PAID';
-        } else if (paidAmount > 0) {
-          status = daysLate > 0 ? 'OVERDUE' : 'PARTIAL';
-        } else if (daysLate > 0) {
-          status = 'OVERDUE';
+        // 🔍 DEBUG: Log status calculation details
+        if (process.env.NODE_ENV === 'development' && member.name.includes('AISHWARYA')) {
+          console.log('🔍 [STATUS DEBUG] Status calculation for', member.name, {
+            remainingAmountRaw,
+            daysLate,
+            paidAmount,
+            willMarkAsPaid: remainingAmountRaw <= 0.01
+          });
+        }
+        
+        // Fallback to frontend calculation if no API status or not PAID
+        if (!actualContribution.status) {
+          if (remainingAmountRaw <= 0.01) { // Allow for small rounding errors (1 cent)
+            status = 'PAID';
+          } else if (paidAmount > 0) {
+            status = daysLate > 0 ? 'OVERDUE' : 'PARTIAL';
+          } else if (daysLate > 0) {
+            status = 'OVERDUE';
+          }
         }
       } else {
         // No contribution record exists yet - all amounts are pending
@@ -811,9 +888,19 @@ export default function ContributionTrackingPage() {
       
       const remainingAmount = roundToTwoDecimals(Math.max(0, totalExpected - paidAmount));
       
-      // Final status check: if remaining amount is essentially zero, mark as PAID
-      if (remainingAmount <= 0.01 && paidAmount > 0) {
-        status = 'PAID';
+      // 🔍 DEBUG: Final status check for AISHWARYA
+      if (process.env.NODE_ENV === 'development' && member.name.includes('AISHWARYA')) {
+        console.log('🔍 [STATUS DEBUG] Final status for', member.name, {
+          finalStatus: status,
+          remainingAmount,
+          totalExpected,
+          paidAmount,
+          statusLogic: {
+            remainingAmountCheck: remainingAmount <= 0.01,
+            hasPaidSomething: paidAmount > 0,
+            apiStatusUsed: actualContribution?.status === 'PAID' ? 'YES' : 'NO'
+          }
+        });
       }
       
       return {
@@ -836,130 +923,90 @@ export default function ContributionTrackingPage() {
     });
   };
 
-  // Function to dynamically update cash and bank allocation based on payment amounts
-  const updateCashBankAllocation = (memberId: string, currentCollection: any) => {
-    const totalPaid = (currentCollection.compulsoryContribution || 0) + 
-                     (currentCollection.interestPaid || 0) + 
-                     (currentCollection.lateFinePaid || 0) +
-                     (currentCollection.loanInsurancePaid || 0) +
-                     (currentCollection.groupSocialPaid || 0);
+  // New function to submit member collection with comprehensive logging for GS/LI input collection and total calculation
+  const submitMemberCollection = async (memberId: string) => {
+    const collection = memberCollections[memberId];
+    if (!collection || !currentPeriod) return;
+
+    // 🔍 LOG 1: Check what's in the collection object - FIXED FIELD NAMES
+    console.log('🔍 [SUBMIT DEBUG] Raw collection object - FIXED:', {
+      memberId,
+      collection,
+      hasGroupSocialPaid: 'groupSocialPaid' in collection,  // 🔧 FIXED field name
+      hasLoanInsurancePaid: 'loanInsurancePaid' in collection,  // 🔧 FIXED field name
+      groupSocialPaidValue: collection.groupSocialPaid,  // 🔧 FIXED field name
+      loanInsurancePaidValue: collection.loanInsurancePaid,  // 🔧 FIXED field name
+      compulsoryContribution: collection.compulsoryContribution,
+      interestPaid: collection.interestPaid,
+      lateFinePaid: collection.lateFinePaid,
+      loanRepayment: collection.loanRepayment
+    });
+
+    // 🔍 LOG 2: Check total calculation - FIXED TO INCLUDE GS AND LI
+    const calculatedTotal = (collection.compulsoryContribution || 0) + 
+                           (collection.interestPaid || 0) + 
+                           (collection.lateFinePaid || 0) + 
+                           (collection.groupSocialPaid || 0) +  // 🔧 FIXED: was collection.groupSocial
+                           (collection.loanInsurancePaid || 0);  // 🔧 FIXED: was collection.loanInsurance
     
-    if (totalPaid > 0) {
-      // Auto-distribute cash vs bank (default 30% cash, 70% bank)
-      const defaultCashRatio = 0.3;
-      const defaultBankRatio = 0.7;
-      
-      const newCashAmount = Math.round(totalPaid * defaultCashRatio * 100) / 100;
-      const newBankAmount = Math.round(totalPaid * defaultBankRatio * 100) / 100;
-      
-      setMemberCollections(prev => ({
-        ...prev,
-        [memberId]: {
-          ...currentCollection,
-          cashAmount: newCashAmount,
-          bankAmount: newBankAmount
-        }
-      }));
-    }
-  };
+    console.log('🔍 [SUBMIT DEBUG] Total calculation breakdown - FIXED:', {
+      compulsoryContribution: collection.compulsoryContribution || 0,
+      interestPaid: collection.interestPaid || 0,
+      lateFinePaid: collection.lateFinePaid || 0,
+      groupSocialPaid: collection.groupSocialPaid || 0,  // 🔧 FIXED field name
+      loanInsurancePaid: collection.loanInsurancePaid || 0,  // 🔧 FIXED field name
+      calculatedTotal
+    });
 
-  // New function to submit member collection with automatic distribution
-  const submitMemberCollection = async (memberId: string, collection: {
-    cashAmount: number;
-    bankAmount: number;
-    compulsoryContribution: number;
-    interestPaid: number;
-    loanRepayment: number;
-    lateFinePaid: number;
-    loanInsurancePaid: number;
-    groupSocialPaid: number;
-    remainingLoan: number;
-  }) => {
     setSavingPayment(memberId);
+    
     try {
-      const totalAmount = collection.cashAmount + collection.bankAmount;
-      
-      if (totalAmount <= 0) {
-        throw new Error('Collection amount must be greater than zero');
+      const contributionId = actualContributions[memberId]?.id;
+      if (!contributionId) {
+        throw new Error('No contribution record found for this member');
       }
 
-      // Find or create contribution record
-      let memberContribution = actualContributions[memberId];
-      
-      if (!memberContribution) {
-        // Create a new contribution record
-        try {
-          const member = group?.members.find((m: any) => m.id === memberId || m.memberId === memberId);
-          if (!member) {
-            throw new Error('Member not found');
-          }
-
-          const createResponse = await fetch(`/api/groups/${groupId}/contributions`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              memberId: memberId,
-              periodId: currentPeriod?.id
-            })
-          });
-
-          if (!createResponse.ok) {
-            throw new Error('Failed to create contribution record');
-          }
-
-          const newContribution = await createResponse.json();
-          memberContribution = newContribution;
-          setActualContributions((prev: any) => ({
-            ...prev,
-            [memberId]: newContribution
-          }));
-        } catch (createError) {
-          console.error('Failed to create contribution record:', createError);
-          throw new Error(`Unable to process payment: ${createError instanceof Error ? createError.message : 'Failed to create contribution record'}`);
-        }
-      }
-
-      if (!memberContribution) {
-        throw new Error('Failed to create or find contribution record');
-      }
-
-      // Prepare cash allocation based on collection type
-      const cashAllocation = {
-        contributionToCashInHand: collection.compulsoryContribution * (collection.cashAmount / totalAmount),
-        contributionToCashInBank: collection.compulsoryContribution * (collection.bankAmount / totalAmount),
-        interestToCashInHand: collection.interestPaid * (collection.cashAmount / totalAmount),
-        interestToCashInBank: collection.interestPaid * (collection.bankAmount / totalAmount),
-        lateFineToCashInHand: (collection.lateFinePaid || 0) * (collection.cashAmount / totalAmount),
-        lateFineToCashInBank: (collection.lateFinePaid || 0) * (collection.bankAmount / totalAmount),
-        loanInsuranceToCashInHand: (collection.loanInsurancePaid || 0) * (collection.cashAmount / totalAmount),
-        loanInsuranceToCashInBank: (collection.loanInsurancePaid || 0) * (collection.bankAmount / totalAmount),
-        groupSocialToCashInHand: (collection.groupSocialPaid || 0) * (collection.cashAmount / totalAmount),
-        groupSocialToCashInBank: (collection.groupSocialPaid || 0) * (collection.bankAmount / totalAmount)
+      // 🔍 LOG 3: Check API payload being sent - FIXED FIELD NAMES
+      const apiPayload = {
+        compulsoryContributionPaid: collection.compulsoryContribution,
+        loanInterestPaid: collection.interestPaid,
+        lateFinePaid: collection.lateFinePaid || 0,
+        groupSocialPaid: collection.groupSocialPaid || 0,  // � FIXED: was collection.groupSocial
+        loanInsurancePaid: collection.loanInsurancePaid || 0,  // � FIXED: was collection.loanInsurance
+        totalPaid: calculatedTotal,
+        status: 'PAID'
       };
 
-      // Update the contribution via API
-      const response = await fetch(`/api/groups/${groupId}/contributions/${memberContribution.id}`, {
+      console.log('🔍 [SUBMIT DEBUG] API payload being sent:', apiPayload);
+
+      const response = await fetch(`/api/groups/${groupId}/contributions/${contributionId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          compulsoryContributionPaid: collection.compulsoryContribution,
-          loanInterestPaid: collection.interestPaid,
-          lateFinePaid: collection.lateFinePaid || 0,
-          loanInsurancePaid: collection.loanInsurancePaid || 0,
-          groupSocialPaid: collection.groupSocialPaid || 0,
-          totalPaid: collection.compulsoryContribution + collection.interestPaid + (collection.lateFinePaid || 0) + (collection.loanInsurancePaid || 0) + (collection.groupSocialPaid || 0),
-          cashAllocation: cashAllocation
-        })
+        body: JSON.stringify(apiPayload)
       });
 
       if (!response.ok) {
         const errorData = await response.json();
+        console.error('🔍 [SUBMIT DEBUG] API Error Response:', errorData);
         throw new Error(errorData.error || 'Failed to update contribution');
       }
 
       const { contribution: updatedContribution } = await response.json();
 
-      // Update local state
+      // 🔍 LOG 4: Check what API returned
+      console.log('🔍 [SUBMIT DEBUG] API Response:', {
+        updatedContribution,
+        status: updatedContribution.status,
+        totalPaid: updatedContribution.totalPaid,
+        remainingAmount: updatedContribution.remainingAmount,
+        groupSocialPaid: updatedContribution.groupSocialPaid,
+        loanInsurancePaid: updatedContribution.loanInsurancePaid
+      });
+
+      // Update local state immediately for instant UI feedback
+      if (process.env.NODE_ENV === 'development') {
+        console.log('🔄 [SUBMISSION] Updating local state with:', updatedContribution);
+      }
       setActualContributions((prev: any) => ({
         ...prev,
         [memberId]: updatedContribution
@@ -981,15 +1028,38 @@ export default function ContributionTrackingPage() {
         }
       }
 
-      // Refresh group data to update loan balances
+      // Refresh group data to update loan balances and contribution data
+      if (process.env.NODE_ENV === 'development') {
+        console.log('🔄 [SUBMISSION] Refreshing group data...');
+      }
       await fetchGroupData();
+      if (process.env.NODE_ENV === 'development') {
+        console.log('🔄 [SUBMISSION] Group data refreshed successfully');
+      }
       
-      // Clear the member collection data after successful submission
+      // Clear the member collection data after successful submission and refresh
       setMemberCollections((prev: any) => {
         const newState = { ...prev };
         delete newState[memberId];
+        if (process.env.NODE_ENV === 'development') {
+          console.log('🔄 [SUBMISSION] Cleared member collection for:', memberId);
+        }
         return newState;
       });
+
+      // Force recalculation of member contributions to update status
+      if (group) {
+        const updatedPaymentData = {
+          ...actualContributions,
+          [memberId]: updatedContribution
+        };
+        const recalculatedContributions = calculateMemberContributions(group, updatedPaymentData);
+        setMemberContributions(recalculatedContributions);
+        
+        if (process.env.NODE_ENV === 'development') {
+          console.log('🔄 [SUBMISSION] Recalculated member contributions:', recalculatedContributions);
+        }
+      }
 
       alert(`Collection submitted successfully! Contribution: ₹${collection.compulsoryContribution}, Interest: ₹${collection.interestPaid}, Late Fine: ₹${collection.lateFinePaid || 0}, Loan Repayment: ₹${collection.loanRepayment}`);
       
@@ -1171,71 +1241,6 @@ export default function ContributionTrackingPage() {
   };
 
   // Payment modal helper functions
-  const markContributionUnpaid = async (memberId: string) => {
-    if (!confirm('Are you sure you want to mark this contribution as unpaid? This will reset all payment records for this member.')) {
-      return;
-    }
-
-    setSavingPayment(memberId);
-    try {
-      // Find the contribution record for this member
-      const memberContribution = actualContributions[memberId];
-      if (!memberContribution) {
-        throw new Error('Member contribution record not found');
-      }
-
-      // Reset all payment amounts to 0
-      const response = await fetch(`/api/groups/${groupId}/contributions/${memberContribution.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          compulsoryContributionPaid: 0,
-          loanInterestPaid: 0,
-          lateFinePaid: 0,
-          totalPaid: 0,
-          status: 'PENDING',
-          cashAllocation: {
-            contributionToCashInHand: 0,
-            contributionToCashInBank: 0,
-            interestToCashInHand: 0,
-            interestToCashInBank: 0
-          }
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to mark as unpaid');
-      }
-
-      const { contribution: updatedContribution } = await response.json();
-
-      // Update local state with the API response
-      setActualContributions(prev => ({
-        ...prev,
-        [memberId]: updatedContribution
-      }));
-
-      // Recalculate member contributions with updated payment data
-      if (group) {
-        const updatedPaymentData = {
-          ...actualContributions,
-          [memberId]: updatedContribution
-        };
-        const recalculatedContributions = calculateMemberContributions(group, updatedPaymentData);
-        setMemberContributions(recalculatedContributions);
-      }
-      
-    } catch (err) {
-      console.error('Error marking contribution as unpaid:', err);
-      const errorMessage = err instanceof Error ? err.message : 'Failed to mark as unpaid';
-      alert(`Error: ${errorMessage}`);
-    } finally {
-      setSavingPayment(null);
-    }
-  };
-
-  // Payment modal helper functions
   const calculateAutoAllocation = () => {
     if (!selectedMember) return;
     
@@ -1312,7 +1317,7 @@ export default function ContributionTrackingPage() {
         let cashInBank = 0;
         
         const contributionRecord = actualContributions[member.memberId];
-        if (contributionRecord && contributionRecord.cashAllocation) {
+        if (contributionRecord?.cashAllocation) {
           try {
             const allocation = JSON.parse(contributionRecord.cashAllocation);
             cashInHand = (allocation.contributionToCashInHand || 0) + (allocation.interestToCashInHand || 0);
@@ -1447,6 +1452,80 @@ export default function ContributionTrackingPage() {
     if (!group) return;
     
     try {
+      // Calculate cash allocation totals
+      const totalCashInHand = Object.values(actualContributions).reduce((sum, record) => {
+        if (record.cashAllocation) {
+          try {
+            const allocation = JSON.parse(record.cashAllocation);
+            return sum + (allocation.contributionToCashInHand || 0) + (allocation.interestToCashInHand || 0);
+          } catch (_e) {
+            return sum;
+          }
+        }
+        return sum;
+      }, 0);
+      
+      const totalCashInBank = Object.values(actualContributions).reduce((sum, record) => {
+        if (record.cashAllocation) {
+          try {
+            const allocation = JSON.parse(record.cashAllocation);
+            return sum + (allocation.contributionToCashInBank || 0) + (allocation.interestToCashInBank || 0);
+          } catch (_e) {
+            return sum;
+          }
+        }
+        return sum;
+      }, 0);
+
+      // Create report data with cash allocation breakdown
+      const reportData = memberContributions.map(member => {
+        // Parse cash allocation if it exists
+        let cashInHand = 0;
+        let cashInBank = 0;
+        
+        const contributionRecord = actualContributions[member.memberId];
+        if (contributionRecord?.cashAllocation) {
+          try {
+            const allocation = JSON.parse(contributionRecord.cashAllocation);
+            cashInHand = (allocation.contributionToCashInHand || 0) + (allocation.interestToCashInHand || 0);
+            cashInBank = (allocation.contributionToCashInBank || 0) + (allocation.interestToCashInBank || 0);
+          } catch (e) {
+            console.error('Error parsing cash allocation:', e);
+          }
+        }
+        
+        return {
+          'Member Name': member.memberName,
+          'Expected Contribution': member.expectedContribution,
+          'Expected Interest': member.expectedInterest,
+          'Loan Insurance': member.loanInsuranceAmount || 0,
+          'Group Social': member.groupSocialAmount || 0,
+          'Late Fine': member.lateFineAmount || 0,
+          'Days Late': member.daysLate || 0,
+          'Total Expected': member.totalExpected,
+          'Amount Paid': member.paidAmount,
+          'Cash in Hand': cashInHand,
+          'Cash in Bank': cashInBank,
+          'Current Loan Amount': member.currentLoanBalance || 0,
+          'Remaining Amount': member.remainingAmount,
+          'Status': member.status,
+          'Payment Date': (contributionRecord?.paidDate) ? 
+            new Date(contributionRecord.paidDate).toLocaleDateString() : 'Not Paid'
+        };
+      });
+
+      // Additional calculations for totals
+      const totalLoanInsuranceExcel = memberContributions.reduce((sum, c) => sum + (c.loanInsuranceAmount || 0), 0);
+      const totalGroupSocialExcel = memberContributions.reduce((sum, c) => sum + (c.groupSocialAmount || 0), 0);
+      const totalExpectedExcel = memberContributions.reduce((sum, c) => sum + c.totalExpected, 0);
+      const totalCollectedExcel = memberContributions.reduce((sum, c) => sum + c.paidAmount, 0);
+      const totalLateFinesExcel = memberContributions.reduce((sum, c) => sum + (c.lateFineAmount || 0), 0);
+      const membersWithLateFinesExcel = memberContributions.filter(c => (c.lateFineAmount || 0) > 0).length;
+      const membersOverdueExcel = memberContributions.filter(c => (c.daysLate || 0) > 0).length;
+      const collectionRateExcel = totalExpectedExcel > 0 ? Math.min((totalCollectedExcel / totalExpectedExcel) * 100, 100) : 0;
+      const totalLoanAmountsExcel = memberContributions.reduce((sum, c) => sum + (c.currentLoanBalance || 0), 0);
+      const groupStandingExcel = totalCollectedExcel + (group.cashInHand || 0) + (group.balanceInBank || 0) + totalLoanAmountsExcel;
+      const sharePerMemberExcel = group.memberCount > 0 ? groupStandingExcel / group.memberCount : 0;
       const { default: ExcelJS } = await import('exceljs');
       const workbook = new ExcelJS.Workbook();
       const worksheet = workbook.addWorksheet('Contributions Report');
@@ -1526,7 +1605,7 @@ export default function ContributionTrackingPage() {
         let cashInBank = 0;
         
         const contributionRecord = actualContributions[member.memberId];
-        if (contributionRecord && contributionRecord.cashAllocation) {
+        if (contributionRecord?.cashAllocation) {
           try {
             const allocation = JSON.parse(contributionRecord.cashAllocation);
             cashInHand = (allocation.contributionToCashInHand || 0) + (allocation.interestToCashInHand || 0);
@@ -1573,9 +1652,6 @@ export default function ContributionTrackingPage() {
         }
       });
 
-      // Calculate totals for summary
-      const totalLoanAmounts = memberContributions.reduce((sum, c) => sum + (c.currentLoanBalance || 0), 0);
-
       // Add summary row with cash allocation totals INCLUDING loan insurance and group social
       const summaryRow = {
         'Member Name': 'TOTAL SUMMARY',
@@ -1589,7 +1665,7 @@ export default function ContributionTrackingPage() {
         'Amount Paid': memberContributions.reduce((sum, c) => sum + c.paidAmount, 0),
         'Cash in Hand': totalCashInHand,
         'Cash in Bank': totalCashInBank,
-        'Current Loan Amount': totalLoanAmounts,
+        'Current Loan Amount': totalLoanAmountsExcel,
         'Remaining Amount': memberContributions.reduce((sum, c) => sum + c.remainingAmount, 0),
         'Status': `${memberContributions.filter(c => c.status === 'PAID').length}/${memberContributions.length} Completed`,
         'Payment Date': ''
@@ -1604,7 +1680,7 @@ export default function ContributionTrackingPage() {
       
       // Fix: Cap collection rate at 100% and round to prevent precision errors
       const collectionRate = totalExpected > 0 ? Math.min((totalCollected / totalExpected) * 100, 100) : 0;
-      const groupStanding = totalCollected + (group.cashInHand || 0) + (group.balanceInBank || 0) + totalLoanAmounts;
+      const groupStanding = totalCollected + (group.cashInHand || 0) + (group.balanceInBank || 0) + totalLoanAmountsExcel;
       const sharePerMember = group.memberCount > 0 ? groupStanding / group.memberCount : 0;
 
       // Create enhanced CSV content with better headers and summary section
@@ -1620,25 +1696,25 @@ export default function ContributionTrackingPage() {
         // Column headers
         Object.keys(reportData[0] || {}),
         // Data rows
-        ...reportData.map(row => Object.values(row)),
+        ...reportData.map((row: any) => Object.values(row)),
         [''], // Empty row before summary
         Object.values(summaryRow),
         [''], // Empty row after summary
         ['COLLECTION STATISTICS & SUMMARY'],
         [''], // Empty row
         ['Collection Statistics:,,Cash Allocation:,,Group Standing:'],
-        [`Total Expected:,₹${totalExpected.toLocaleString()},Cash in Hand:,₹${totalCashInHand.toLocaleString()},Group Standing:,₹${groupStanding.toLocaleString()}`],
-        [`Total Collected:,₹${totalCollected.toLocaleString()},Cash in Bank:,₹${totalCashInBank.toLocaleString()},Total Revenue:,₹${totalCollected.toLocaleString()}`],
-        [`Collection Rate:,${collectionRate.toFixed(1)}%,Total Loan Amounts:,₹${totalLoanAmounts.toLocaleString()},Share per Member:,₹${sharePerMember.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`],
+        [`Total Expected:,₹${totalExpected.toLocaleString()},Cash in Hand:,₹${((group.cashInHand || 0) + totalCashInHand).toLocaleString()},Group Standing:,₹${groupStanding.toLocaleString()}`],
+        [`Total Collected:,₹${totalCollected.toLocaleString()},Cash in Bank:,₹${((group.balanceInBank || 0) + totalCashInBank).toLocaleString()},Total Revenue:,₹${totalCollected.toLocaleString()}`],
+        [`Collection Rate:,${collectionRate.toFixed(1)}%,Total Loan Amounts:,₹${totalLoanAmountsExcel.toLocaleString()},Share per Member:,₹${sharePerMember.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`],
         [`Members Completed:,${memberContributions.filter(c => c.status === 'PAID').length}/${memberContributions.length},,,,`],
         [''], // Empty row
         ['Late Fine Details:,,,,'],
         [`Total Late Fines:,₹${totalLateFines.toLocaleString()},Members with Late Fines:,${membersWithLateFines}/${memberContributions.length},Members Overdue:,${membersOverdue}/${memberContributions.length}`],
         [''], // Empty row
         [`Generated on ${new Date().toLocaleString()}`]
-      ].map(row => {
+      ].map((row: any[]) => {
         // Make sure all elements in the row are strings to avoid CSV parsing issues
-        return row.map(cell => {
+        return row.map((cell: any) => {
           if (cell === null || cell === undefined) return '';
           if (typeof cell === 'string') return `"${cell.replace(/"/g, '""')}"`;
           return cell;
@@ -1743,7 +1819,7 @@ export default function ContributionTrackingPage() {
         let cashInBank = 0;
         
         const contributionRecord = actualContributions[member.memberId];
-        if (contributionRecord && contributionRecord.cashAllocation) {
+        if (contributionRecord?.cashAllocation) {
           try {
             const allocation = JSON.parse(contributionRecord.cashAllocation);
             cashInHand = Number((allocation.contributionToCashInHand || 0) + (allocation.interestToCashInHand || 0)) || 0;
@@ -2512,7 +2588,7 @@ export default function ContributionTrackingPage() {
         let errorMessage = 'Failed to process loan repayment';
         try {
           const errorData = JSON.parse(errorText);
-          if (errorData.error && errorData.error.includes('exceeds current balance')) {
+          if (errorData.error?.includes('exceeds current balance')) {
             errorMessage = `Repayment amount exceeds the current loan balance. Please check the current balance and try again.`;
           } else if (errorData.error) {
             errorMessage = errorData.error;
@@ -2609,6 +2685,25 @@ export default function ContributionTrackingPage() {
       setSavingLoanOperation(false);
     }
   };
+
+  // 🔍 DEBUG: Calculate filtered contributions for display
+  const paidContributions = memberContributions.filter(c => c.status === 'PAID');
+  const unpaidContributions = memberContributions.filter(c => c.status !== 'PAID');
+
+  // 🔍 DEBUG: Log filtering results for AISHWARYA
+  if (process.env.NODE_ENV === 'development') {
+    const aishwarya = memberContributions.find(c => c.memberName.includes('AISHWARYA'));
+    if (aishwarya) {
+      console.log('🔍 [FILTER DEBUG] AISHWARYA filtering result:', {
+        status: aishwarya.status,
+        isInCompleted: paidContributions.some(c => c.memberName.includes('AISHWARYA')),
+        isInPending: unpaidContributions.some(c => c.memberName.includes('AISHWARYA')),
+        totalExpected: aishwarya.totalExpected,
+        paidAmount: aishwarya.paidAmount,
+        remainingAmount: aishwarya.remainingAmount
+      });
+    }
+  }
 
   return (
     <div>
@@ -2813,21 +2908,44 @@ export default function ContributionTrackingPage() {
         <div className="card bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-700/50">
           <div className="p-4">
             <h3 className="text-lg font-semibold text-blue-700 dark:text-blue-300">Total Collected</h3>
-            <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">₹{totalCollected.toLocaleString()}</p>
+            <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">₹{(() => {
+              // Calculate dynamic total collected including current inputs
+              const actualCollected = totalCollected;
+              const inputCollected = Object.values(memberCollections).reduce((sum, collection) => {
+                return sum + (collection.cashAmount || 0) + (collection.bankAmount || 0);
+              }, 0);
+              return (actualCollected + inputCollected).toLocaleString();
+            })()}</p>
           </div>
         </div>
         {lateFinesEnabled && (
           <div className="card bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-700/50">
             <div className="p-4">
               <h3 className="text-lg font-semibold text-red-700 dark:text-red-300">Total Late Fines</h3>
-              <p className="text-2xl font-bold text-red-600 dark:text-red-400">₹{totalLateFines.toLocaleString()}</p>
+              <p className="text-2xl font-bold text-red-600 dark:text-red-400">₹{(() => {
+                // Calculate dynamic late fines including current inputs
+                const actualFines = totalLateFines;
+                const inputFines = Object.values(memberCollections).reduce((sum, collection) => {
+                  return sum + (collection.lateFinePaid || 0);
+                }, 0);
+                return (actualFines + inputFines).toLocaleString();
+              })()}</p>
             </div>
           </div>
         )}
         <div className="card bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-700/50">
           <div className="p-4">
             <h3 className="text-lg font-semibold text-orange-700 dark:text-orange-300">Remaining</h3>
-            <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">₹{totalRemaining.toLocaleString()}</p>
+            <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">₹{(() => {
+              // Calculate dynamic remaining amount
+              const actualCollected = totalCollected;
+              const inputCollected = Object.values(memberCollections).reduce((sum, collection) => {
+                return sum + (collection.cashAmount || 0) + (collection.bankAmount || 0);
+              }, 0);
+              const totalDynamicCollected = actualCollected + inputCollected;
+              const dynamicRemaining = Math.max(0, totalExpected - totalDynamicCollected);
+              return dynamicRemaining.toLocaleString();
+            })()}</p>
           </div>
         </div>
       </div>
@@ -2843,7 +2961,65 @@ export default function ContributionTrackingPage() {
           </div>
           
           {(() => {
-            // Calculate group standing dynamically
+            // Calculate financial values using the new formulas - incorporating both actualContributions and memberCollections
+            const previousMonthCashInHand = group.cashInHand || 0;
+            const previousMonthCashInBank = group.balanceInBank || 0;
+            const previousMonthBalance = previousMonthCashInHand + previousMonthCashInBank;
+
+            // Calculate Total Collection components from both actual contributions and current input
+            // 🔧 FIX: Use the main totalCollected value and break it down properly
+            const totalCollectionCalculated = totalCollected + Object.values(memberCollections).reduce((sum, collection) => {
+              return sum + (collection.compulsoryContribution || 0) + (collection.lateFinePaid || 0) + 
+                     (collection.interestPaid || 0) + (collection.loanInsurancePaid || 0) + (collection.groupSocialPaid || 0);
+            }, 0);
+
+            // Break down the total collection into components based on memberContributions data
+            const monthlyContribution = memberContributions.reduce((sum, member) => sum + member.expectedContribution, 0) * 
+              (totalCollected / (totalExpected > 0 ? totalExpected : 1));
+
+            const lateFine = memberContributions.reduce((sum, member) => sum + (member.lateFineAmount || 0), 0) * 
+              (totalCollected / (totalExpected > 0 ? totalExpected : 1));
+
+            const interestPaidPersonalLoans = memberContributions.reduce((sum, member) => sum + member.expectedInterest, 0) * 
+              (totalCollected / (totalExpected > 0 ? totalExpected : 1));
+
+            const loanInsurance = group.loanInsuranceEnabled ? 
+              memberContributions.reduce((sum, member) => sum + (member.loanInsuranceAmount || 0), 0) * 
+              (totalCollected / (totalExpected > 0 ? totalExpected : 1)) : 0;
+
+            const groupSocial = group.groupSocialEnabled ? 
+              memberContributions.reduce((sum, member) => sum + (member.groupSocialAmount || 0), 0) * 
+              (totalCollected / (totalExpected > 0 ? totalExpected : 1)) : 0;
+
+            // Total Collection = Use the main calculated value plus current inputs
+            const totalCollection = totalCollectionCalculated;
+
+            // Interest Income = Income by Interest (Personal Loan)
+            const interestIncome = interestPaidPersonalLoans;
+
+            // Expenses in This Month (assume 0 for now, can be calculated from actual expense records)
+            const expensesThisMonth = 0;
+
+            // New Cash in Group = Previous Month Balance + Total Collection + Interest Income − Expenses in This Month
+            const newCashInGroup = previousMonthBalance + totalCollection + interestIncome - expensesThisMonth;
+
+            // Personal Loan Outstanding = Sum of all current loan balances from memberContributions
+            const personalLoanOutstanding = memberContributions.reduce((sum, member) => {
+              return sum + (member.currentLoanBalance || 0);
+            }, 0);
+
+            // Group Social Fund (current period contributions to GS fund - for now just this period)
+            const groupSocialFund = groupSocial;
+
+            // Loan Insurance Fund (current period contributions to LI fund - for now just this period)  
+            const loanInsuranceFund = loanInsurance;
+
+            // Total Group Standing = New Cash in Group + Personal Loan Outstanding − Group Social Fund − Loan Insurance Fund
+            const totalGroupStanding = newCashInGroup + personalLoanOutstanding - groupSocialFund - loanInsuranceFund;
+
+            const sharePerMember = group.memberCount > 0 ? Math.ceil(totalGroupStanding / group.memberCount) : 0;
+
+            // Calculate current period cash breakdown for display (including dynamic input)
             const currentPeriodCashInHand = Object.values(actualContributions).reduce((sum, record) => {
               if (record.cashAllocation) {
                 try {
@@ -2853,7 +3029,9 @@ export default function ContributionTrackingPage() {
                   return sum;
                 }
               }
-              return sum + roundToTwoDecimals((record.totalPaid || 0) * 0.3); // Default 30% to cash
+              return sum + Math.ceil((record.totalPaid || 0) * 0.3);
+            }, 0) + Object.values(memberCollections).reduce((sum, collection) => {
+              return sum + (collection.cashAmount || 0);
             }, 0);
             
             const currentPeriodCashInBank = Object.values(actualContributions).reduce((sum, record) => {
@@ -2865,146 +3043,159 @@ export default function ContributionTrackingPage() {
                   return sum;
                 }
               }
-              return sum + roundToTwoDecimals((record.totalPaid || 0) * 0.7); // Default 70% to bank
+              return sum + Math.ceil((record.totalPaid || 0) * 0.7);
+            }, 0) + Object.values(memberCollections).reduce((sum, collection) => {
+              return sum + (collection.bankAmount || 0);
             }, 0);
             
-            const totalCashInHand = (group.cashInHand || 0) + currentPeriodCashInHand;
-            const totalCashInBank = (group.balanceInBank || 0) + currentPeriodCashInBank;
-            const totalLoanAssets = memberContributions.reduce((sum, member) => {
-              return sum + (member.currentLoanBalance || 0);
-            }, 0);
-            const groupStanding = totalCashInHand + totalCashInBank + totalLoanAssets;
-            const sharePerMember = group.memberCount > 0 ? groupStanding / group.memberCount : 0;
+            const totalCashInHand = Math.ceil(previousMonthCashInHand + currentPeriodCashInHand);
+            const totalCashInBank = Math.ceil(previousMonthCashInBank + currentPeriodCashInBank);
             
             return (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                {/* Cash in Hand */}
-                <div className="bg-gradient-to-br from-green-50 to-green-100 dark:from-green-900/20 dark:to-green-800/20 p-4 rounded-lg border border-green-200 dark:border-green-700/50">
-                  <div className="flex items-center space-x-3">
-                    <div className="p-2 bg-green-600 rounded-lg">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
-                      </svg>
-                    </div>
-                    <div className="flex-1">
-                      <p className="text-sm font-medium text-green-700 dark:text-green-300">Cash in Hand</p>
-                      {(() => {
-                        // Calculate cash allocation from current contributions
-                        const currentPeriodCashInHand = Object.values(actualContributions).reduce((sum, record) => {
-                          if (record.cashAllocation) {
-                            try {
-                              const allocation = JSON.parse(record.cashAllocation);
-                              return sum + (allocation.contributionToCashInHand || 0) + (allocation.interestToCashInHand || 0);
-                            } catch (_e) {
-                              return sum;
-                            }
-                          }
-                          // If no allocation data, use simplified calculation (30% of payments to cash)
-                          return sum + roundToTwoDecimals((record.totalPaid || 0) * 0.3);
-                        }, 0);
+              <div className="space-y-6">
+                {/* New Formula Display */}
+                <div className="bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-blue-900/20 dark:to-indigo-800/20 p-6 rounded-lg border-2 border-blue-200 dark:border-blue-700">
+                  <h3 className="text-xl font-bold text-blue-800 dark:text-blue-200 mb-4">Total Group Standing Formula</h3>
+                  
+
+                  
+                  <div className="bg-white dark:bg-gray-800 p-4 rounded-lg border border-blue-300 dark:border-blue-600 mb-4">
+                    <p className="text-sm font-semibold text-blue-900 dark:text-blue-100 mb-2">Formula:</p>
+                    <p className="text-lg font-bold text-blue-800 dark:text-blue-200 mb-4">
+                      Total Group Standing = New Cash in Group + Personal Loan Outstanding − Group Social Fund − Loan Insurance Fund
+                    </p>
+                    
+                    {/* Calculation Breakdown */}
+                    <div className="space-y-3 text-sm">
+                      <div className="bg-gray-50 dark:bg-gray-700 p-3 rounded">
+                        <p className="font-semibold mb-2">New Cash in Group = Previous Month Balance + Total Collection + Interest Income − Expenses</p>
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <span>Previous Month Balance:</span><span>₹{previousMonthBalance.toLocaleString()}</span>
+                          <span>Total Collection:</span><span>₹{totalCollection.toLocaleString()}</span>
+                          <span>Interest Income:</span><span>₹{interestIncome.toLocaleString()}</span>
+                          <span>Expenses This Month:</span><span>₹{expensesThisMonth.toLocaleString()}</span>
+                          <hr className="col-span-2 border-gray-300 dark:border-gray-600"/>
+                          <span className="font-bold">New Cash in Group:</span><span className="font-bold">₹{newCashInGroup.toLocaleString()}</span>
+                        </div>
+                      </div>
+                      
+                      <div className="bg-gray-50 dark:bg-gray-700 p-3 rounded">
+                        <p className="font-semibold mb-2">Total Collection = Monthly Contribution + Late Fine + Interest Paid + Loan Insurance + Group Social</p>
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <span>Monthly Contribution:</span><span>₹{monthlyContribution.toLocaleString()}</span>
+                          <span>Late Fine:</span><span>₹{lateFine.toLocaleString()}</span>
+                          <span>Interest Paid (Personal Loans):</span><span>₹{interestPaidPersonalLoans.toLocaleString()}</span>
+                          {group.loanInsuranceEnabled && (<><span>Loan Insurance:</span><span>₹{loanInsurance.toLocaleString()}</span></>)}
+                          {group.groupSocialEnabled && (<><span>Group Social:</span><span>₹{groupSocial.toLocaleString()}</span></>)}
+                          <hr className="col-span-2 border-gray-300 dark:border-gray-600"/>
+                          <span className="font-bold">Total Collection:</span><span className="font-bold">₹{totalCollection.toLocaleString()}</span>
+                        </div>
                         
-                        const totalCashInHand = (group.cashInHand || 0) + currentPeriodCashInHand;
-                        
-                        return (
-                          <>
-                            <p className="text-xl font-bold text-green-800 dark:text-green-200">
-                              ₹{totalCashInHand.toLocaleString()}
-                            </p>
-                            {!showOldContributions && currentPeriodCashInHand > 0 && (
-                              <p className="text-xs text-green-600 dark:text-green-400">
-                                Base: ₹{(group.cashInHand || 0).toLocaleString()} + Period: ₹{currentPeriodCashInHand.toLocaleString()}
-                              </p>
-                            )}
-                          </>
-                        );
-                      })()}
+                        {/* Breakdown of input vs actual */}
+                        <div className="mt-2 pt-2 border-t border-gray-300 dark:border-gray-600">
+                          <p className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Breakdown:</p>
+                          <div className="grid grid-cols-2 gap-1 text-xs text-gray-500 dark:text-gray-500">
+                            <span>From Submitted:</span><span>₹{totalCollected.toLocaleString()}</span>
+                            <span>From Current Input:</span><span>₹{(
+                              Object.values(memberCollections).reduce((sum, collection) => {
+                                return sum + (collection.compulsoryContribution || 0) + (collection.lateFinePaid || 0) + 
+                                       (collection.interestPaid || 0) + (collection.loanInsurancePaid || 0) + (collection.groupSocialPaid || 0);
+                              }, 0)
+                            ).toLocaleString()}</span>
+                          </div>
+                        </div>
+                      </div>
+                      
+                      <div className="bg-gray-50 dark:bg-gray-700 p-3 rounded">
+                        <p className="font-semibold mb-2">Final Calculation:</p>
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <span>New Cash in Group:</span><span>₹{newCashInGroup.toLocaleString()}</span>
+                          <span>Personal Loan Outstanding:</span><span>₹{personalLoanOutstanding.toLocaleString()}</span>
+                          {group.groupSocialEnabled && (<><span>Group Social Fund:</span><span className="text-red-600">-₹{groupSocialFund.toLocaleString()}</span></>)}
+                          {group.loanInsuranceEnabled && (<><span>Loan Insurance Fund:</span><span className="text-red-600">-₹{loanInsuranceFund.toLocaleString()}</span></>)}
+                          <hr className="col-span-2 border-gray-300 dark:border-gray-600"/>
+                          <span className="font-bold text-lg">Total Group Standing:</span><span className="font-bold text-lg text-blue-600">₹{totalGroupStanding.toLocaleString()}</span>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
 
-                {/* Cash in Bank */}
-                <div className="bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/20 dark:to-blue-800/20 p-4 rounded-lg border border-blue-200 dark:border-blue-700/50">
-                  <div className="flex items-center space-x-3">
-                    <div className="p-2 bg-blue-600 rounded-lg">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-                      </svg>
-                    </div>
-                    <div className="flex-1">
-                      <p className="text-sm font-medium text-blue-700 dark:text-blue-300">Cash in Bank</p>
-                      {(() => {
-                        // Calculate cash allocation to bank from current contributions
-                        const currentPeriodCashInBank = Object.values(actualContributions).reduce((sum, record) => {
-                          if (record.cashAllocation) {
-                            try {
-                              const allocation = JSON.parse(record.cashAllocation);
-                              return sum + (allocation.contributionToCashInBank || 0) + (allocation.interestToCashInBank || 0);
-                            } catch (_e) {
-                              return sum;
-                            }
-                          }
-                          // If no allocation data, use simplified calculation (70% of payments to bank)
-                          return sum + roundToTwoDecimals((record.totalPaid || 0) * 0.7);
-                        }, 0);
-                        
-                        const totalCashInBank = (group.balanceInBank || 0) + currentPeriodCashInBank;
-                        
-                        return (
-                          <>
-                            <p className="text-xl font-bold text-blue-800 dark:text-blue-200">
-                              ₹{totalCashInBank.toLocaleString()}
-                            </p>
-                            {!showOldContributions && currentPeriodCashInBank > 0 && (
-                              <p className="text-xs text-blue-600 dark:text-blue-400">
-                                Base: ₹{(group.balanceInBank || 0).toLocaleString()} + Period: ₹{currentPeriodCashInBank.toLocaleString()}
-                              </p>
-                            )}
-                            {!showOldContributions && currentPeriodCashInBank === 0 && (
-                              <p className="text-xs text-blue-600 dark:text-blue-400">Bank Balance</p>
-                            )}
-                          </>
-                        );
-                      })()}
+                {/* Current Period Summary Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                  {/* Cash in Hand */}
+                  <div className="bg-gradient-to-br from-green-50 to-green-100 dark:from-green-900/20 dark:to-green-800/20 p-4 rounded-lg border border-green-200 dark:border-green-700/50">
+                    <div className="flex items-center space-x-3">
+                      <div className="p-2 bg-green-600 rounded-lg">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+                        </svg>
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm font-medium text-green-700 dark:text-green-300">Cash in Hand</p>
+                        <p className="text-xl font-bold text-green-800 dark:text-green-200">₹{totalCashInHand.toLocaleString()}</p>
+                        {!showOldContributions && currentPeriodCashInHand > 0 && (
+                          <p className="text-xs text-green-600 dark:text-green-400">
+                            Base: ₹{previousMonthCashInHand.toLocaleString()} + Period: ₹{currentPeriodCashInHand.toLocaleString()}
+                          </p>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                {/* Total Loan Assets */}
-                <div className="bg-gradient-to-br from-purple-50 to-purple-100 dark:from-purple-900/20 dark:to-purple-800/20 p-4 rounded-lg border border-purple-200 dark:border-purple-700/50">
-                  <div className="flex items-center space-x-3">
-                    <div className="p-2 bg-purple-600 rounded-lg">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                      </svg>
-                    </div>
-                    <div className="flex-1">
-                      <p className="text-sm font-medium text-purple-700 dark:text-purple-300">Loan Assets</p>
-                      <p className="text-xl font-bold text-purple-800 dark:text-purple-200">
-                        ₹{totalLoanAssets.toLocaleString()}
-                      </p>
-                      <p className="text-xs text-purple-600 dark:text-purple-400">
-                        Active Loans: {memberContributions.filter(m => m.currentLoanBalance > 0).length}
-                      </p>
+                  {/* Cash in Bank */}
+                  <div className="bg-gradient-to-br from-blue-50 to-blue-100 dark:from-blue-900/20 dark:to-blue-800/20 p-4 rounded-lg border border-blue-200 dark:border-blue-700/50">
+                    <div className="flex items-center space-x-3">
+                      <div className="p-2 bg-blue-600 rounded-lg">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                        </svg>
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm font-medium text-blue-700 dark:text-blue-300">Cash in Bank</p>
+                        <p className="text-xl font-bold text-blue-800 dark:text-blue-200">₹{totalCashInBank.toLocaleString()}</p>
+                        {!showOldContributions && currentPeriodCashInBank > 0 && (
+                          <p className="text-xs text-blue-600 dark:text-blue-400">
+                            Base: ₹{previousMonthCashInBank.toLocaleString()} + Period: ₹{currentPeriodCashInBank.toLocaleString()}
+                          </p>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                {/* Group Standing */}
-                <div className="bg-gradient-to-br from-orange-50 to-orange-100 dark:from-orange-900/20 dark:to-orange-800/20 p-4 rounded-lg border border-orange-200 dark:border-orange-700/50">
-                  <div className="flex items-center space-x-3">
-                    <div className="p-2 bg-orange-600 rounded-lg">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-                      </svg>
+                  {/* Loan Assets */}
+                  <div className="bg-gradient-to-br from-purple-50 to-purple-100 dark:from-purple-900/20 dark:to-purple-800/20 p-4 rounded-lg border border-purple-200 dark:border-purple-700/50">
+                    <div className="flex items-center space-x-3">
+                      <div className="p-2 bg-purple-600 rounded-lg">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                        </svg>
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm font-medium text-purple-700 dark:text-purple-300">Loan Assets</p>
+                        <p className="text-xl font-bold text-purple-800 dark:text-purple-200">₹{personalLoanOutstanding.toLocaleString()}</p>
+                        <p className="text-xs text-purple-600 dark:text-purple-400">
+                          Active Loans: {memberContributions.filter(m => m.currentLoanBalance > 0).length}
+                        </p>
+                      </div>
                     </div>
-                    <div className="flex-1">
-                      <p className="text-sm font-medium text-orange-700 dark:text-orange-300">Group Standing</p>
-                      <p className="text-xl font-bold text-orange-800 dark:text-orange-200">
-                        ₹{groupStanding.toLocaleString()}
-                      </p>
-                      <p className="text-xs text-orange-600 dark:text-orange-400">
-                        Per Member: ₹{sharePerMember.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
-                      </p>
+                  </div>
+
+                  {/* Group Standing */}
+                  <div className="bg-gradient-to-br from-orange-50 to-orange-100 dark:from-orange-900/20 dark:to-orange-800/20 p-4 rounded-lg border border-orange-200 dark:border-orange-700/50">
+                    <div className="flex items-center space-x-3">
+                      <div className="p-2 bg-orange-600 rounded-lg">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                        </svg>
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm font-medium text-orange-700 dark:text-orange-300">Group Standing</p>
+                        <p className="text-xl font-bold text-orange-800 dark:text-orange-200">₹{totalGroupStanding.toLocaleString()}</p>
+                        <p className="text-xs text-orange-600 dark:text-orange-400">
+                          Per Member: ₹{sharePerMember.toLocaleString()}
+                        </p>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -3012,122 +3203,8 @@ export default function ContributionTrackingPage() {
             );
           })()}
 
-          {/* Group Standing Details */}
-          <div className="mt-6 p-4 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-gray-200 dark:border-gray-700">
-            <h3 className="text-lg font-semibold text-foreground mb-3">Group Standing Breakdown</h3>
-            {(() => {
-              // Calculate dynamic cash allocation
-              const currentPeriodCashInHand = Object.values(actualContributions).reduce((sum, record) => {
-                if (record.cashAllocation) {
-                  try {
-                    const allocation = JSON.parse(record.cashAllocation);
-                    return sum + (allocation.contributionToCashInHand || 0) + (allocation.interestToCashInHand || 0);
-                  } catch (_e) {
-                    return sum;
-                  }
-                }
-                return sum + roundToTwoDecimals((record.totalPaid || 0) * 0.3); // Default 30% to cash
-              }, 0);
-              
-              const currentPeriodCashInBank = Object.values(actualContributions).reduce((sum, record) => {
-                if (record.cashAllocation) {
-                  try {
-                    const allocation = JSON.parse(record.cashAllocation);
-                    return sum + (allocation.contributionToCashInBank || 0) + (allocation.interestToCashInBank || 0);
-                  } catch (_e) {
-                    return sum;
-                  }
-                }
-                return sum + roundToTwoDecimals((record.totalPaid || 0) * 0.7); // Default 70% to bank
-              }, 0);
-              
-              const startingCashInHand = group.cashInHand || 0;
-              const startingCashInBank = group.balanceInBank || 0;
-              const totalCashInHand = startingCashInHand + currentPeriodCashInHand;
-              const totalCashInBank = startingCashInBank + currentPeriodCashInBank;
-              
-              const totalLoanAssets = memberContributions.reduce((sum, member) => {
-                return sum + (member.currentLoanBalance || 0);
-              }, 0);
-              const collectionThisPeriod = totalCollected;
-              const interestThisPeriod = memberContributions.reduce((sum, member) => {
-                return sum + member.expectedInterest;
-              }, 0);
-              const totalGroupStanding = totalCashInHand + totalCashInBank + totalLoanAssets;
-              
-              return (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="space-y-3">
-                    <div className="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-600">
-                      <span className="text-sm text-muted">Starting Cash in Hand:</span>
-                      <span className="font-medium">₹{startingCashInHand.toLocaleString()}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-600">
-                      <span className="text-sm text-muted">Starting Cash in Bank:</span>
-                      <span className="font-medium">₹{startingCashInBank.toLocaleString()}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-600">
-                      <span className="text-sm text-muted">Collection This Period:</span>
-                      <span className="font-medium text-green-600 dark:text-green-400">+₹{collectionThisPeriod.toLocaleString()}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-600">
-                      <span className="text-sm text-muted">Period Cash to Hand:</span>
-                      <span className="font-medium text-green-600 dark:text-green-400">+₹{currentPeriodCashInHand.toLocaleString()}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-600">
-                      <span className="text-sm text-muted">Period Cash to Bank:</span>
-                      <span className="font-medium text-blue-600 dark:text-blue-400">+₹{currentPeriodCashInBank.toLocaleString()}</span>
-                    </div>
-                  </div>
-                  
-                  <div className="space-y-3">
-                    <div className="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-600">
-                      <span className="text-sm text-muted">Current Cash in Hand:</span>
-                      <span className="font-medium text-green-700 dark:text-green-300">₹{totalCashInHand.toLocaleString()}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-600">
-                      <span className="text-sm text-muted">Current Cash in Bank:</span>
-                      <span className="font-medium text-blue-700 dark:text-blue-300">₹{totalCashInBank.toLocaleString()}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-600">
-                      <span className="text-sm text-muted">Interest This Period:</span>
-                      <span className="font-medium text-purple-600 dark:text-purple-400">₹{interestThisPeriod.toLocaleString()}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-600">
-                      <span className="text-sm text-muted">Total Loan Assets:</span>
-                      <span className="font-medium text-purple-600 dark:text-purple-400">₹{totalLoanAssets.toLocaleString()}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-600">
-                      <span className="text-sm text-muted">Total Members:</span>
-                      <span className="font-medium">{group.memberCount}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-2 border-b border-gray-200 dark:border-gray-600">
-                      <span className="text-sm text-muted">Share per Member:</span>
-                      <span className="font-medium">₹{(totalGroupStanding / group.memberCount).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
-                    </div>
-                    <div className="flex justify-between items-center py-2 border-t-2 border-primary pt-3">
-                      <span className="text-base font-semibold text-foreground">Total Group Standing:</span>
-                      <span className="text-lg font-bold text-primary">₹{totalGroupStanding.toLocaleString()}</span>
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
-            
-            {/* Calculation Formula */}
-            <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-700/50">
-              <p className="text-sm text-blue-800 dark:text-blue-200 font-medium mb-1">Calculation Formula:</p>
-              <p className="text-xs text-blue-700 dark:text-blue-300">
-                Group Standing = Current Cash in Hand + Current Cash in Bank + Total Loan Assets
-              </p>
-              {!showOldContributions && (
-                <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
-                  <strong>Real-time Update:</strong> Cash values include starting amounts plus allocated contributions from this period. 
-                  When closing the period, all values are finalized and recorded in the periodic record.
-                </p>
-              )}
-            </div>
-          </div>
+
+
         </div>
       </div>
 
@@ -3137,8 +3214,16 @@ export default function ContributionTrackingPage() {
           <div className="flex justify-between items-center mb-3">
             <h3 className="text-lg font-semibold text-foreground">Collection Progress</h3>
             <span className="text-sm font-medium text-primary">
-              {/* Fix: Cap collection rate at 100% to prevent display of >100% */}
-              {totalExpected > 0 ? Math.min(Math.round((totalCollected / totalExpected) * 100), 100) : 0}% ₹{totalCollected.toLocaleString()} collected
+              {(() => {
+                // Calculate dynamic collection rate
+                const actualCollected = totalCollected;
+                const inputCollected = Object.values(memberCollections).reduce((sum, collection) => {
+                  return sum + (collection.cashAmount || 0) + (collection.bankAmount || 0);
+                }, 0);
+                const totalDynamicCollected = actualCollected + inputCollected;
+                const collectionRate = totalExpected > 0 ? Math.min(Math.round((totalDynamicCollected / totalExpected) * 100), 100) : 0;
+                return `${collectionRate}% ₹${totalDynamicCollected.toLocaleString()} collected`;
+              })()}
             </span>
           </div>
           
@@ -3147,20 +3232,37 @@ export default function ContributionTrackingPage() {
             <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-6 shadow-inner">
               <div 
                 className="bg-gradient-to-r from-green-500 to-blue-500 h-6 rounded-full transition-all duration-700 ease-out shadow-lg relative overflow-hidden"
-                style={{ width: `${totalExpected > 0 ? Math.min((totalCollected / totalExpected) * 100, 100) : 0}%` }}
+                style={{ 
+                  width: `${(() => {
+                    const actualCollected = totalCollected;
+                    const inputCollected = Object.values(memberCollections).reduce((sum, collection) => {
+                      return sum + (collection.cashAmount || 0) + (collection.bankAmount || 0);
+                    }, 0);
+                    const totalDynamicCollected = actualCollected + inputCollected;
+                    return totalExpected > 0 ? Math.min((totalDynamicCollected / totalExpected) * 100, 100) : 0;
+                  })()}%` 
+                }}
               >
                 {/* Animated shine effect */}
                 <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-r from-transparent via-white/20 to-transparent animate-pulse"></div>
                 
                 {/* Percentage text inside bar (when there's enough space) */}
-                {totalExpected > 0 && (totalCollected / totalExpected) * 100 > 20 && (
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <span className="text-white font-bold text-sm drop-shadow-lg">
-                      {/* Fix: Cap collection rate at 100% to prevent display of >100% */}
-                      {Math.min(Math.round((totalCollected / totalExpected) * 100), 100)}%
-                    </span>
-                  </div>
-                )}
+                {(() => {
+                  const actualCollected = totalCollected;
+                  const inputCollected = Object.values(memberCollections).reduce((sum, collection) => {
+                    return sum + (collection.cashAmount || 0) + (collection.bankAmount || 0);
+                  }, 0);
+                  const totalDynamicCollected = actualCollected + inputCollected;
+                  const collectionPercentage = totalExpected > 0 ? (totalDynamicCollected / totalExpected) * 100 : 0;
+                  
+                  return collectionPercentage > 20 && (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <span className="text-white font-bold text-sm drop-shadow-lg">
+                        {Math.min(Math.round(collectionPercentage), 100)}%
+                      </span>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           </div>
@@ -3170,11 +3272,25 @@ export default function ContributionTrackingPage() {
             <div className="flex items-center space-x-4">
               <span className="text-muted">Target: ₹{totalExpected.toLocaleString()}</span>
               <span className="text-green-600 dark:text-green-400 font-medium">
-                Collected: ₹{totalCollected.toLocaleString()}
+                Collected: ₹{(() => {
+                  const actualCollected = totalCollected;
+                  const inputCollected = Object.values(memberCollections).reduce((sum, collection) => {
+                    return sum + (collection.cashAmount || 0) + (collection.bankAmount || 0);
+                  }, 0);
+                  return (actualCollected + inputCollected).toLocaleString();
+                })()}
               </span>
             </div>
             <span className="text-orange-600 dark:text-orange-400 font-medium">
-              Remaining: ₹{totalRemaining.toLocaleString()}
+              Remaining: ₹{(() => {
+                const actualCollected = totalCollected;
+                const inputCollected = Object.values(memberCollections).reduce((sum, collection) => {
+                  return sum + (collection.cashAmount || 0) + (collection.bankAmount || 0);
+                }, 0);
+                const totalDynamicCollected = actualCollected + inputCollected;
+                const dynamicRemaining = Math.max(0, totalExpected - totalDynamicCollected);
+                return dynamicRemaining.toLocaleString();
+              })()}
             </span>
           </div>
           
@@ -3186,15 +3302,41 @@ export default function ContributionTrackingPage() {
                   Total Members: <span className="font-medium">{memberContributions.length}</span>
                 </span>
                 <span className="text-green-600 dark:text-green-400 font-medium">
-                  Paid: {completedContributions.length}
+                  Paid: {(() => {
+                    // Calculate completed members including current inputs
+                    const baseCompleted = paidContributions.length;
+                    const inputCompleted = Object.keys(memberCollections).filter(memberId => {
+                      const collection = memberCollections[memberId];
+                      const totalInput = (collection.cashAmount || 0) + (collection.bankAmount || 0);
+                      return totalInput > 0;
+                    }).length;
+                    return baseCompleted + inputCompleted;
+                  })()}
                 </span>
                 <span className="text-orange-600 dark:text-orange-400 font-medium">
-                  Pending: {pendingContributions.length}
+                  Pending: {(() => {
+                    const basePending = unpaidContributions.length;
+                    const inputCompleted = Object.keys(memberCollections).filter(memberId => {
+                      const collection = memberCollections[memberId];
+                      const totalInput = (collection.cashAmount || 0) + (collection.bankAmount || 0);
+                      return totalInput > 0;
+                    }).length;
+                    return Math.max(0, basePending - inputCompleted);
+                  })()}
                 </span>
               </div>
               <div className="text-right">
                 <span className="text-muted text-xs">
-                  {memberContributions.length > 0 ? Math.round((completedContributions.length / memberContributions.length) * 100) : 0}% members completed
+                  {(() => {
+                    const baseCompleted = completedContributions.length;
+                    const inputCompleted = Object.keys(memberCollections).filter(memberId => {
+                      const collection = memberCollections[memberId];
+                      const totalInput = (collection.cashAmount || 0) + (collection.bankAmount || 0);
+                      return totalInput > 0;
+                    }).length;
+                    const totalCompleted = baseCompleted + inputCompleted;
+                    return memberContributions.length > 0 ? Math.round((totalCompleted / memberContributions.length) * 100) : 0;
+                  })()}% members completed
                 </span>
               </div>
             </div>
@@ -3204,61 +3346,85 @@ export default function ContributionTrackingPage() {
               <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
                 <div 
                   className="bg-gradient-to-r from-purple-500 to-pink-500 h-2 rounded-full transition-all duration-500"
-                  style={{ width: `${memberContributions.length > 0 ? Math.min((completedContributions.length / memberContributions.length) * 100, 100) : 0}%` }}
+                  style={{ 
+                    width: `${(() => {
+                      const baseCompleted = completedContributions.length;
+                      const inputCompleted = Object.keys(memberCollections).filter(memberId => {
+                        const collection = memberCollections[memberId];
+                        const totalInput = (collection.cashAmount || 0) + (collection.bankAmount || 0);
+                        return totalInput > 0;
+                      }).length;
+                      const totalCompleted = baseCompleted + inputCompleted;
+                      return memberContributions.length > 0 ? Math.min((totalCompleted / memberContributions.length) * 100, 100) : 0;
+                    })()}%` 
+                  }}
                 ></div>
               </div>
             </div>
             
             {/* Remaining Members Display */}
-            {pendingContributions.length > 0 && (
-              <div className="mt-4 pt-3 border-t border-border">
-                <div className="flex items-center justify-between mb-2">
-                  <h4 className="text-sm font-medium text-foreground">Members Yet to Pay</h4>
-                  <span className="text-xs text-muted">{pendingContributions.length} remaining</span>
-                </div>
-                
-                <div className="max-h-24 overflow-y-auto">
-                  <div className="flex flex-wrap gap-2">
-                    {pendingContributions.slice(0, 10).map((member) => (
-                      <div
-                        key={member.memberId}
-                        className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                          member.status === 'OVERDUE' 
-                            ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300' 
-                            : member.status === 'PARTIAL'
-                            ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300'
-                            : 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300'
-                        }`}
-                        title={`${member.memberName} - ₹${member.remainingAmount.toLocaleString()} remaining${member.daysLate > 0 ? ` (${member.daysLate} days late)` : ''}`}
-                      >
-                        {member.memberName}
-                        {member.status === 'PARTIAL' && (
-                          <span className="ml-1 text-xs">
-                            (₹{member.remainingAmount.toLocaleString()})
-                          </span>
-                        )}
-                        {member.daysLate > 0 && (
-                          <span className="ml-1 text-xs text-red-600 dark:text-red-400">
-                            ⏰
-                          </span>
-                        )}
-                      </div>
-                    ))}
-                    {pendingContributions.length > 10 && (
-                      <div className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400">
-                        +{pendingContributions.length - 10} more
-                      </div>
-                    )}
+            {(() => {
+              const basePending = pendingContributions.length;
+              const membersWithInput = Object.keys(memberCollections).filter(memberId => {
+                const collection = memberCollections[memberId];
+                const totalInput = (collection.cashAmount || 0) + (collection.bankAmount || 0);
+                return totalInput > 0;
+              });
+              const dynamicPending = Math.max(0, basePending - membersWithInput.length);
+              
+              return dynamicPending > 0 && (
+                <div className="mt-4 pt-3 border-t border-border">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="text-sm font-medium text-foreground">Members Yet to Pay</h4>
+                    <span className="text-xs text-muted">{dynamicPending} remaining</span>
                   </div>
-                </div>
-                
-                {pendingContributions.length > 10 && (
-                  <div className="mt-2 text-xs text-muted">
-                    Showing first 10 members. View full list below in the contributions table.
+                  
+                  <div className="max-h-24 overflow-y-auto">
+                    <div className="flex flex-wrap gap-2">
+                      {pendingContributions
+                        .filter(member => !membersWithInput.includes(member.memberId))
+                        .slice(0, 10)
+                        .map((member) => (
+                          <div
+                            key={member.memberId}
+                            className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                              member.status === 'OVERDUE' 
+                                ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300' 
+                                : member.status === 'PARTIAL'
+                                ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-300'
+                                : 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300'
+                            }`}
+                            title={`${member.memberName} - ₹${member.remainingAmount.toLocaleString()} remaining${member.daysLate > 0 ? ` (${member.daysLate} days late)` : ''}`}
+                          >
+                            {member.memberName}
+                            {member.status === 'PARTIAL' && (
+                              <span className="ml-1 text-xs">
+                                (₹{member.remainingAmount.toLocaleString()})
+                              </span>
+                            )}
+                            {member.daysLate > 0 && (
+                              <span className="ml-1 text-xs text-red-600 dark:text-red-400">
+                                ⏰
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      {dynamicPending > 10 && (
+                        <div className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400">
+                          +{dynamicPending - 10} more
+                        </div>
+                      )}
+                    </div>
                   </div>
-                )}
-              </div>
-            )}
+                  
+                  {dynamicPending > 10 && (
+                    <div className="mt-2 text-xs text-muted">
+                      Showing first 10 members. View full list below in the contributions table.
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         </div>
       </div>
@@ -3302,33 +3468,60 @@ export default function ContributionTrackingPage() {
             }
           </p>
         </div>
-        <div className="overflow-x-auto">
-          <table className="min-w-full">
+        <div className="overflow-x-auto" style={{ minHeight: '400px' }}>
+          <table className="min-w-full table-auto">
             <thead>
               <tr className="border-b border-border">
-                <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">Member</th>
-                <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">Monthly Contribution</th>
-                <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">Interest Due</th>
-                {lateFinesEnabled && (
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">Late Fine</th>
-                )}
-                {group?.loanInsuranceEnabled && (
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">Loan Insurance</th>
-                )}
-                {group?.groupSocialEnabled && (
-                  <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">Group Social</th>
-                )}
-                <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">Loan Balance</th>
-                <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">
-                  <div className="text-center">Collection</div>
-                  <div className="grid grid-cols-2 gap-1 mt-1">
-                    <div className="text-center text-xs">Cash</div>
-                    <div className="text-center text-xs">Bank</div>
+                <th className="px-3 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider sticky left-0 bg-white dark:bg-gray-800 z-10">Member</th>
+                <th className="px-4 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider min-w-[180px]">
+                  <div className="text-center font-bold">Collection</div>
+                  <div className="grid grid-cols-2 gap-1 mt-2">
+                    <div className="text-center text-xs font-medium">Cash</div>
+                    <div className="text-center text-xs font-medium">Bank</div>
                   </div>
                 </th>
-                <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">Remaining Loan</th>
-                <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">Status</th>
-                <th className="px-6 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider">Actions</th>
+                <th className="px-3 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider min-w-[120px]">
+                  <div className="text-center">Monthly</div>
+                  <div className="text-center">Contribution</div>
+                </th>
+                <th className="px-3 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider min-w-[100px]">
+                  <div className="text-center">Interest</div>
+                  <div className="text-center">Due</div>
+                </th>
+                {lateFinesEnabled && (
+                  <th className="px-3 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider min-w-[100px]">
+                    <div className="text-center">Late</div>
+                    <div className="text-center">Fine</div>
+                  </th>
+                )}
+                {group?.loanInsuranceEnabled && (
+                  <th className="px-3 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider min-w-[100px]">
+                    <div className="text-center">Loan</div>
+                    <div className="text-center">Insurance</div>
+                  </th>
+                )}
+                {group?.groupSocialEnabled && (
+                  <th className="px-3 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider min-w-[100px]">
+                    <div className="text-center">Group</div>
+                    <div className="text-center">Social</div>
+                  </th>
+                )}
+                <th className="px-3 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider min-w-[120px]">
+                  <div className="text-center">Loan</div>
+                  <div className="text-center">Balance</div>
+                </th>
+                <th className="px-3 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider min-w-[100px]">
+                  <div className="text-center">Remaining</div>
+                  <div className="text-center">Loan</div>
+                </th>
+                <th className="px-3 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider min-w-[80px]">Status</th>
+                <th className="px-3 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider min-w-[120px]">
+                  <div className="text-center">Submission</div>
+                  <div className="text-center">Date</div>
+                </th>
+                <th className="px-3 py-4 text-left text-xs font-semibold text-muted uppercase tracking-wider min-w-[100px] sticky right-0 bg-white dark:bg-gray-800 z-10 border-l border-gray-200 dark:border-gray-700">
+                  <div className="text-center font-bold text-primary">Actions</div>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -3343,7 +3536,8 @@ export default function ContributionTrackingPage() {
                   lateFinePaid: 0,
                   loanInsurancePaid: 0,
                   groupSocialPaid: 0,
-                  remainingLoan: contribution.currentLoanBalance || 0
+                  remainingLoan: contribution.currentLoanBalance || 0,
+                  submissionDate: new Date() // Default to current date
                 };
 
                 // Auto-calculate distributions when amounts change
@@ -3351,9 +3545,23 @@ export default function ContributionTrackingPage() {
                   // Round up decimal values
                   const roundedValue = Math.ceil(value);
                   
+                  // Calculate maximum allowable total collection amount
+                  const maxTotalDue = contribution.expectedContribution + 
+                                    contribution.expectedInterest + 
+                                    (contribution.lateFineAmount || 0) + 
+                                    (contribution.loanInsuranceAmount || 0) + 
+                                    (contribution.groupSocialAmount || 0) + 
+                                    contribution.currentLoanBalance;
+                  
+                  const otherFieldAmount = field === 'cashAmount' ? memberCollection.bankAmount : memberCollection.cashAmount;
+                  const proposedTotal = roundedValue + otherFieldAmount;
+                  
+                  // Prevent entering more than total due amount
+                  const finalValue = Math.min(roundedValue, Math.max(0, maxTotalDue - otherFieldAmount));
+                  
                   const totalCollected = field === 'cashAmount' 
-                    ? roundedValue + memberCollection.bankAmount 
-                    : memberCollection.cashAmount + roundedValue;
+                    ? finalValue + memberCollection.bankAmount 
+                    : memberCollection.cashAmount + finalValue;
                   
                   // Distribute: compulsory contribution → interest → loan repayment
                   let remaining = totalCollected;
@@ -3384,7 +3592,7 @@ export default function ContributionTrackingPage() {
                     ...prev,
                     [memberId]: {
                       ...memberCollection,
-                      [field]: roundedValue,
+                      [field]: finalValue,
                       compulsoryContribution,
                       interestPaid,
                       loanRepayment,
@@ -3402,7 +3610,7 @@ export default function ContributionTrackingPage() {
                       contribution.status === 'OVERDUE' ? 'bg-red-50/50 dark:bg-red-900/10' : ''
                     }`}
                   >
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-3 py-4 whitespace-nowrap sticky left-0 bg-white dark:bg-gray-800 z-10 border-r border-gray-200 dark:border-gray-700">
                       <div className="text-sm font-medium text-foreground">{contribution.memberName}</div>
                       {contribution.currentLoanBalance > 0 && (
                         <div className="text-sm text-muted">Active Loan: ₹{formatCurrency(contribution.currentLoanBalance)}</div>
@@ -3413,7 +3621,100 @@ export default function ContributionTrackingPage() {
                         </div>
                       )}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-4 py-4 whitespace-nowrap">
+                      {(() => {
+                        // Calculate max total due amount for validation
+                        const maxTotalDue = contribution.expectedContribution + 
+                                          contribution.expectedInterest + 
+                                          (contribution.lateFineAmount || 0) + 
+                                          (contribution.loanInsuranceAmount || 0) + 
+                                          (contribution.groupSocialAmount || 0) + 
+                                          contribution.currentLoanBalance;
+                        
+                        return (
+                          <>
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Cash</label>
+                                <input
+                                  type="number"
+                                  value={memberCollection.cashAmount === 0 ? '' : memberCollection.cashAmount}
+                                  onFocus={(e) => {
+                                    // Clear field if value is 0 for better UX
+                                    if (Number(e.target.value) === 0) {
+                                      e.target.value = '';
+                                    }
+                                  }}
+                                  onChange={(e) => {
+                                    const inputValue = e.target.value;
+                                    const value = Math.max(0, Number(inputValue) || 0);
+                                    // Round up decimal values
+                                    const roundedValue = Math.ceil(value);
+                                    handleCollectionChange('cashAmount', roundedValue);
+                                  }}
+                                  className={`w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary dark:bg-gray-700 dark:text-gray-100 ${
+                                    memberCollection.cashAmount > Math.max(0, maxTotalDue - memberCollection.bankAmount)
+                                      ? 'border-red-500 dark:border-red-400 bg-red-50 dark:bg-red-900/20'
+                                      : 'border-gray-300 dark:border-gray-600'
+                                  }`}
+                                  min="0"
+                                  max={Math.max(0, maxTotalDue - memberCollection.bankAmount)}
+                                  step="1"
+                                  disabled={currentPeriod?.isClosed}
+                                  placeholder="0"
+                                  title={`Maximum allowed: ₹${Math.max(0, maxTotalDue - memberCollection.bankAmount)}`}
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Bank</label>
+                                <input
+                                  type="number"
+                                  value={memberCollection.bankAmount === 0 ? '' : memberCollection.bankAmount}
+                                  onFocus={(e) => {
+                                    // Clear field if value is 0 for better UX
+                                    if (Number(e.target.value) === 0) {
+                                      e.target.value = '';
+                                    }
+                                  }}
+                                  onChange={(e) => {
+                                    const inputValue = e.target.value;
+                                    const value = Math.max(0, Number(inputValue) || 0);
+                                    // Round up decimal values
+                                    const roundedValue = Math.ceil(value);
+                                    handleCollectionChange('bankAmount', roundedValue);
+                                  }}
+                                  className={`w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary dark:bg-gray-700 dark:text-gray-100 ${
+                                    memberCollection.bankAmount > Math.max(0, maxTotalDue - memberCollection.cashAmount)
+                                      ? 'border-red-500 dark:border-red-400 bg-red-50 dark:bg-red-900/20'
+                                      : 'border-gray-300 dark:border-gray-600'
+                                  }`}
+                                  min="0"
+                                  max={Math.max(0, maxTotalDue - memberCollection.cashAmount)}
+                                  step="1"
+                                  disabled={currentPeriod?.isClosed}
+                                  placeholder="0"
+                                  title={`Maximum allowed: ₹${Math.max(0, maxTotalDue - memberCollection.cashAmount)}`}
+                                />
+                              </div>
+                            </div>
+                            <div className="text-sm text-gray-600 dark:text-gray-400 mt-2 text-center">
+                              <div className="font-medium">
+                                Total: ₹{formatCurrency(memberCollection.cashAmount + memberCollection.bankAmount)}
+                              </div>
+                              <div className="text-xs mt-1">
+                                Max Due: ₹{formatCurrency(maxTotalDue)}
+                              </div>
+                              {(memberCollection.cashAmount + memberCollection.bankAmount) > maxTotalDue && (
+                                <div className="text-red-500 text-xs mt-1 font-medium">
+                                  ⚠️ Exceeds total due amount
+                                </div>
+                              )}
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </td>
+                    <td className="px-3 py-4 whitespace-nowrap">
                       <div className="text-sm font-medium text-foreground mb-1">
                         Due: ₹{formatCurrency(contribution.expectedContribution)}
                       </div>
@@ -3468,7 +3769,7 @@ export default function ContributionTrackingPage() {
                         />
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-3 py-4 whitespace-nowrap">
                       <div className="text-sm text-foreground mb-1">
                         Due: ₹{formatCurrency(contribution.expectedInterest)}
                       </div>
@@ -3524,7 +3825,7 @@ export default function ContributionTrackingPage() {
                       </div>
                     </td>
                     {lateFinesEnabled && (
-                      <td className="px-6 py-4 whitespace-nowrap">
+                      <td className="px-3 py-4 whitespace-nowrap">
                         <div className="text-sm font-medium text-foreground mb-1">
                           Due: ₹{formatCurrency(contribution.lateFineAmount)}
                         </div>
@@ -3586,7 +3887,7 @@ export default function ContributionTrackingPage() {
                       </td>
                     )}
                     {group?.loanInsuranceEnabled && (
-                      <td className="px-6 py-4 whitespace-nowrap">
+                      <td className="px-3 py-4 whitespace-nowrap">
                         <div className="text-sm font-medium text-foreground mb-1">
                           Due: ₹{formatCurrency(contribution.loanInsuranceAmount || 0)}
                         </div>
@@ -3638,7 +3939,7 @@ export default function ContributionTrackingPage() {
                       </td>
                     )}
                     {group?.groupSocialEnabled && (
-                      <td className="px-6 py-4 whitespace-nowrap">
+                      <td className="px-3 py-4 whitespace-nowrap">
                         <div className="text-sm font-medium text-foreground mb-1">
                           Due: ₹{formatCurrency(contribution.groupSocialAmount || 0)}
                         </div>
@@ -3689,7 +3990,7 @@ export default function ContributionTrackingPage() {
                         </div>
                       </td>
                     )}
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-3 py-4 whitespace-nowrap">
                       <div className="text-sm font-medium text-primary mb-1">
                         Balance: ₹{formatCurrency(contribution.currentLoanBalance)}
                       </div>
@@ -3742,67 +4043,12 @@ export default function ContributionTrackingPage() {
                         />
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Cash</label>
-                          <input
-                            type="number"
-                            value={memberCollection.cashAmount === 0 ? '' : memberCollection.cashAmount}
-                            onFocus={(e) => {
-                              // Clear field if value is 0 for better UX
-                              if (Number(e.target.value) === 0) {
-                                e.target.value = '';
-                              }
-                            }}
-                            onChange={(e) => {
-                              const inputValue = e.target.value;
-                              const value = Math.max(0, Number(inputValue) || 0);
-                              // Round up decimal values
-                              const roundedValue = Math.ceil(value);
-                              handleCollectionChange('cashAmount', roundedValue);
-                            }}
-                            className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-primary dark:bg-gray-700 dark:text-gray-100"
-                            min="0"
-                            step="1"
-                            disabled={currentPeriod?.isClosed}
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Bank</label>
-                          <input
-                            type="number"
-                            value={memberCollection.bankAmount === 0 ? '' : memberCollection.bankAmount}
-                            onFocus={(e) => {
-                              // Clear field if value is 0 for better UX
-                              if (Number(e.target.value) === 0) {
-                                e.target.value = '';
-                              }
-                            }}
-                            onChange={(e) => {
-                              const inputValue = e.target.value;
-                              const value = Math.max(0, Number(inputValue) || 0);
-                              // Round up decimal values
-                              const roundedValue = Math.ceil(value);
-                              handleCollectionChange('bankAmount', roundedValue);
-                            }}
-                            className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-primary dark:bg-gray-700 dark:text-gray-100"
-                            min="0"
-                            step="1"
-                            disabled={currentPeriod?.isClosed}
-                          />
-                        </div>
-                      </div>
-                      <div className="text-xs text-muted mt-1 text-center">
-                        Total: ₹{formatCurrency(memberCollection.cashAmount + memberCollection.bankAmount)}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-3 py-4 whitespace-nowrap">
                       <div className="text-sm font-medium text-orange-600 dark:text-orange-400">
                         ₹{formatCurrency(memberCollection.remainingLoan)}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-3 py-4 whitespace-nowrap">
                       <span className={`px-3 py-1 text-xs font-semibold rounded-full ${
                         memberCollection.compulsoryContribution >= contribution.expectedContribution && 
                         memberCollection.interestPaid >= contribution.expectedInterest
@@ -3819,19 +4065,46 @@ export default function ContributionTrackingPage() {
                          contribution.status === 'OVERDUE' ? 'OVERDUE' : 'PENDING'}
                       </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                    <td className="px-3 py-4 whitespace-nowrap">
+                      <div className="text-sm">
+                        <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Date</label>
+                        <DatePicker
+                          selected={memberCollection.submissionDate || new Date()}
+                          onChange={(date) => {
+                            if (date) {
+                              setMemberCollections(prev => ({
+                                ...prev,
+                                [memberId]: {
+                                  ...memberCollection,
+                                  submissionDate: date
+                                }
+                              }));
+                            }
+                          }}
+                          dateFormat="MMM dd, yyyy"
+                          className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-100"
+                          maxDate={new Date()}
+                          disabled={currentPeriod?.isClosed}
+                          placeholderText="Select date"
+                        />
+                        <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                          Affects late fines
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-3 py-4 whitespace-nowrap text-sm sticky right-0 bg-white dark:bg-gray-800 z-10 border-l border-gray-200 dark:border-gray-700">
                       <button
                         onClick={async () => {
                           const totalAmount = memberCollection.cashAmount + memberCollection.bankAmount;
                           if (totalAmount > 0) {
-                            await submitMemberCollection(memberId, memberCollection);
+                            await submitMemberCollection(memberId);
                           } else {
                             alert('Please enter collection amount in cash or bank');
                           }
                         }}
                         disabled={savingPayment === contribution.memberId || currentPeriod?.isClosed || 
                                 (memberCollection.cashAmount + memberCollection.bankAmount) <= 0}
-                        className={`btn-primary text-xs py-2 px-3 disabled:opacity-50 disabled:cursor-not-allowed ${
+                        className={`w-full btn-primary text-xs py-2 px-3 disabled:opacity-50 disabled:cursor-not-allowed ${
                           currentPeriod?.isClosed 
                             ? 'bg-gray-300 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-600 cursor-not-allowed' 
                             : ''
@@ -3851,7 +4124,7 @@ export default function ContributionTrackingPage() {
               {(showCompleted ? completedContributions : pendingContributions).length === 0 && (
                 <tr>
                   <td colSpan={
-                    8 + 
+                    9 + 
                     (lateFinesEnabled ? 1 : 0) + 
                     (group?.loanInsuranceEnabled ? 1 : 0) + 
                     (group?.groupSocialEnabled ? 1 : 0)
@@ -3935,8 +4208,14 @@ export default function ContributionTrackingPage() {
         <div className="text-sm text-muted">
           <p>Last updated: {new Date().toLocaleString()}</p>
           <p className="mt-1">
-            {/* Fix: Cap collection rate at 100% to prevent display of >100% */}
-            Collection rate: {totalExpected > 0 ? Math.min(((totalCollected / totalExpected) * 100), 100).toFixed(1) : 0}%
+            Collection rate: {(() => {
+              const actualCollected = totalCollected;
+              const inputCollected = Object.values(memberCollections).reduce((sum, collection) => {
+                return sum + (collection.cashAmount || 0) + (collection.bankAmount || 0);
+              }, 0);
+              const totalDynamicCollected = actualCollected + inputCollected;
+              return totalExpected > 0 ? Math.min(((totalDynamicCollected / totalExpected) * 100), 100).toFixed(1) : 0;
+            })()}%
           </p>
         </div>
       </div>
