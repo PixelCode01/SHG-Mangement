@@ -83,8 +83,8 @@ const groupSchema = z.object({
     .optional(),
   bankName: z.string().optional(),
 
-  // Step 2: Member Import (Optional)
-  // Step 3: Member Information
+  // Step 2: Member Setup (Import/Create members - they will be saved during final submission)
+  // Step 3: Financial Data
   leaderId: z.string().min(1, 'Leader selection is required'),
   memberCount: z.number().int().positive('Member count must be positive')
     .min(1, 'Member count must be at least 1')
@@ -108,7 +108,7 @@ const groupSchema = z.object({
   description: z.string().optional(),
   members: z.array(memberDataSchema).min(1, 'At least the leader must be selected'),
   
-  // Step 4: Current Month Financial Data
+  // Step 4: Review & Create (Final submission creates members and group)
   cashInHand: z.number().nonnegative().optional(),
   balanceInBank: z.number().nonnegative().optional(),
   interestRate: z.number().nonnegative().max(100, 'Interest rate cannot exceed 100%').optional(),
@@ -783,9 +783,6 @@ The PDF may contain scanned images or use an unsupported format.
   const [isCreatingMember, setIsCreatingMember] = useState(false);
   const [createMemberError, setCreateMemberError] = useState<string | null>(null);
   
-  // State for bulk creating members from import
-  const [isCreatingMembers, setIsCreatingMembers] = useState(false);
-
   // State to manage the list of members displayable in dropdowns within this form instance
   const [displayableMembers, setDisplayableMembers] = useState<{ id: string; name: string }[]>(initialAvailableMembers);
   
@@ -1112,7 +1109,99 @@ The PDF may contain scanned images or use an unsupported format.
     setRecordCreationStatus(null); 
     setRecordCreationError(null); 
     try {
-      // Transform late fine rule data from individual tier fields to API format
+      // Initialize member ID mapping for temporary IDs
+      const memberIdMapping: { [tempId: string]: string } = {}; // Map temporary IDs to real IDs
+      
+      // Step 1: Create members from imported data if any exist (they have temporary IDs starting with 'temp_')
+      const importedMembersToCreate = displayableMembers.filter(member => 
+        member.id.startsWith('temp_') && (member as any).isFromImport
+      );
+      
+      if (importedMembersToCreate.length > 0) {
+        console.log(`🔧 Creating ${importedMembersToCreate.length} imported members before group creation...`);
+        setRecordCreationStatus(`Creating ${importedMembersToCreate.length} members...`);
+        
+        const createdMemberIds: string[] = [];
+        const memberCreationErrors: string[] = [];
+        
+        for (const member of importedMembersToCreate) {
+          try {
+            console.log(`Creating member: ${member.name}`);
+            const response = await fetch('/api/members?allowDuplicates=true', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                name: member.name,
+                email: (member as any).email,
+                phone: (member as any).phone,
+              }),
+            });
+
+            if (response.ok) {
+              const newMember = await response.json();
+              console.log(`Successfully created member:`, newMember);
+              createdMemberIds.push(newMember.id);
+              
+              // Map the temporary ID to the real ID
+              memberIdMapping[member.id] = newMember.id;
+              
+              // Update displayableMembers to replace the temporary member with the real one
+              setDisplayableMembers(prev => {
+                return prev.map(m => 
+                  m.id === member.id 
+                    ? { id: newMember.id, name: newMember.name }
+                    : m
+                );
+              });
+              
+            } else {
+              const errorData = await response.json();
+              if (response.status === 409 && errorData.error?.includes('already exists')) {
+                console.log(`Member ${member.name} already exists - will use existing member`);
+                // Try to find the existing member in displayableMembers or fetch it
+                const existingMember = displayableMembers.find(m => 
+                  m.name.toLowerCase() === member.name.toLowerCase() && !m.id.startsWith('temp_')
+                );
+                if (existingMember) {
+                  memberIdMapping[member.id] = existingMember.id;
+                  createdMemberIds.push(existingMember.id);
+                  
+                  // Replace the temporary member with the existing one
+                  setDisplayableMembers(prev => {
+                    return prev.map(m => 
+                      m.id === member.id 
+                        ? { id: existingMember.id, name: existingMember.name }
+                        : m
+                    );
+                  });
+                }
+              } else {
+                const errorMessage = errorData.error || errorData.message || 'Unknown error';
+                memberCreationErrors.push(`${member.name}: ${errorMessage}`);
+                console.error(`Failed to create member ${member.name}:`, errorMessage);
+              }
+            }
+          } catch (error) {
+            memberCreationErrors.push(`${member.name}: ${(error as Error).message}`);
+            console.error(`Error creating member ${member.name}:`, error);
+          }
+        }
+        
+        if (memberCreationErrors.length > 0) {
+          console.warn('Some members could not be created:', memberCreationErrors);
+          setRecordCreationError(`Warning: Some members could not be created: ${memberCreationErrors.join(', ')}`);
+        }
+        
+        console.log(`🔧 Successfully processed ${createdMemberIds.length} members`);
+        setRecordCreationStatus(`Successfully created ${createdMemberIds.length} members. Creating group...`);
+        
+        // Refresh member list if callback is available
+        if (onMemberCreated) {
+          await onMemberCreated();
+        }
+      }
+      
+      // Step 2: Transform late fine rule data from individual tier fields to API format
       let transformedLateFineRule = data.lateFineRule;
       if (data.lateFineRule?.isEnabled && data.lateFineRule.ruleType === 'TIER_BASED') {
         // Build tierRules array from individual tier fields
@@ -1158,6 +1247,7 @@ The PDF may contain scanned images or use an unsupported format.
         console.log('🔧 [TIER_BASED FIX] Transformed tier rules:', JSON.stringify(tierRules, null, 2));
       }
 
+      // Step 3: Create group submission data
       const submissionData: GroupSubmissionData = {
         ...data,
         dateOfStarting: (data.dateOfStarting instanceof Date ? data.dateOfStarting.toISOString() : new Date(data.dateOfStarting).toISOString()),
@@ -1166,17 +1256,23 @@ The PDF may contain scanned images or use an unsupported format.
         // Send the new field names for balance tracking
         loanInsuranceBalance: data.loanInsurancePreviousBalance || 0,
         groupSocialBalance: data.groupSocialPreviousBalance || 0,
-        members: data.members.map((m: z.infer<typeof memberDataSchema>) => ({ // Add type for m
-          memberId: m.memberId,
-          currentShare: data.globalShareAmount || 0, // Apply global share amount to all members
-          currentLoanAmount: m.currentLoanAmount || 0, // Ensure currentLoanAmount is always a number
-          familyMembersCount: m.familyMembersCount || 1, // Include family members count
-        })),
+        members: data.members.map((m: z.infer<typeof memberDataSchema>) => {
+          // If this member had a temporary ID, use the real ID from our mapping
+          const realMemberId = memberIdMapping[m.memberId] || m.memberId;
+          return {
+            memberId: realMemberId,
+            currentShare: data.globalShareAmount || 0, // Apply global share amount to all members
+            currentLoanAmount: m.currentLoanAmount || 0, // Ensure currentLoanAmount is always a number
+            familyMembersCount: m.familyMembersCount || 1, // Include family members count
+          };
+        }),
       };
       
       // Debug logging
       console.log('Form submission data:', JSON.stringify(submissionData, null, 2));
       
+      // Step 4: Submit the group
+      setRecordCreationStatus('Creating group...');
       const result = await onSubmit(submissionData, groupToEdit?.id);
       const submittedDateOfStarting = data.dateOfStarting instanceof Date ? data.dateOfStarting : new Date(data.dateOfStarting);
 
@@ -2175,10 +2271,15 @@ The PDF may contain scanned images or use an unsupported format.
     }
   };
 
-  // Step 2: Member Import (Optional)
+  // Step 2: Member Setup (Optional)
   const Step2 = useMemo(() => (
     <div className="card p-6">
-      <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-6">Step 2: Add Members (Optional)</h2>
+      <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-6">Step 2: Member Setup</h2>
+      <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 mb-6">
+        <p className="text-sm text-blue-800 dark:text-blue-200">
+          <strong>Note:</strong> Members added or imported here will be created in the database when you complete the group creation process in Step 4.
+        </p>
+      </div>
       <div className="space-y-6">
         
         {/* Manual Member Addition Section */}
@@ -2565,29 +2666,32 @@ The PDF may contain scanned images or use an unsupported format.
                 onClick={(e) => {
                   e.preventDefault();
                   e.stopPropagation();
-                  console.log('Create Members button clicked');
-                  createMembersFromImport();
+                  console.log('Add to Selection button clicked');
+                  // Simply add imported members to displayable list for selection in Step 3
+                  const newMembers = importedMembers.map((member, index) => ({
+                    id: `temp_${Date.now()}_${index}`, // Temporary ID for UI purposes
+                    name: member.name,
+                    email: member.email,
+                    phone: member.phone,
+                    loanAmount: member.loanAmount,
+                    isFromImport: true // Flag to identify imported members
+                  }));
+                  
+                  // Add to displayable members for selection in Step 3
+                  setDisplayableMembers(prev => [...prev, ...newMembers]);
+                  
+                  // Clear import UI
+                  setImportedMembers([]);
+                  setShowImportedMembers(false);
+                  setMemberImportStatus(`Added ${newMembers.length} member(s) to selection. They will be created when you complete the group.`);
+                  setShowMemberImport(false);
                 }}
-                disabled={isCreatingMembers}
-                className={`px-4 py-2 text-sm font-medium rounded-md text-white ${
-                  isCreatingMembers 
-                    ? 'bg-green-500 cursor-not-allowed' 
-                    : 'bg-green-600 hover:bg-green-700'
-                } flex items-center`}
+                className="px-4 py-2 text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 flex items-center"
               >
-                {isCreatingMembers ? (
-                  <>
-                    <div className="h-4 w-4 mr-2 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                    Creating...
-                  </>
-                ) : (
-                  <>
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                    </svg>
-                    Create These Members
-                  </>
-                )}
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                </svg>
+                Add to Selection
               </button>
               <button
                 type="button"
@@ -2623,7 +2727,7 @@ The PDF may contain scanned images or use an unsupported format.
   // Step 3: Member Selection & Group Setup - Memoized to prevent unnecessary re-renders
   const Step3 = useMemo(() => (
     <div className="card p-6">
-      <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-6">Step 3: Member & Group Setup</h2>
+      <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-6">Step 3: Financial Data</h2>
       <div className="space-y-4">
         <div>
           <label htmlFor="leaderId" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -2876,7 +2980,7 @@ The PDF may contain scanned images or use an unsupported format.
   // eslint-disable-next-line react-hooks/exhaustive-deps -- Complex component with many interdependent state variables and functions
   ), [register, errors, control, displayableMembers]);
 
-  // Step 4: Current Month Financial Data
+  // Step 4: Review & Create (Final submission creates members and group)
   // Watch specific values for dynamic updates
   const watchedMembers = watch('members');
   const watchedCashInHand = watch('cashInHand');
@@ -2921,7 +3025,7 @@ The PDF may contain scanned images or use an unsupported format.
       <div className="card p-6">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
-            Step 4: Current Financial Data
+            Step 4: Review & Create
           </h2>
         </div>
 
@@ -3735,252 +3839,6 @@ The PDF may contain scanned images or use an unsupported format.
 
   // Duplicate function removed - using definition above
 
-  const createMembersFromImport = useCallback(async () => {
-    if (importedMembers.length === 0) {
-      console.warn('No imported members to create');
-      return;
-    }
-    
-    // Prevent duplicate submissions
-    if (isCreatingMembers) {
-      console.warn('Member creation already in progress');
-      return;
-    }
-    
-    console.log(`Starting member creation for ${importedMembers.length} members`);
-    console.log('Current step at start:', currentStep);
-    console.log('Component mounted:', isMountedRef.current);
-    
-    setIsCreatingMembers(true);
-    setMemberImportStatus("Creating members...");
-    setMemberImportError(null);
-
-    try {
-      const createdMembers: { id: string; name: string }[] = [];
-      const errors: string[] = [];
-      
-      console.log('Processing members for creation...');
-      
-      // Check if any members already exist by making a quick API call
-      const existingMembersCheck = await Promise.all(
-        importedMembers.slice(0, 5).map(async (member) => {
-          try {
-            const response = await fetch('/api/members', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                name: member.name,
-                email: member.email,
-                phone: member.phone,
-              }),
-            });
-            return { name: member.name, exists: response.status === 409 };
-          } catch {
-            return { name: member.name, exists: false };
-          }
-        })
-      );
-      
-      const existingCount = existingMembersCheck.filter(m => m.exists).length;
-      
-      if (existingCount > 0) {
-        console.log(`Warning: ${existingCount} out of ${existingMembersCheck.length} sample members already exist`);
-        
-        // Note: Removed the confirmation dialog to hide the popup when members already exist
-        // The import will proceed automatically and only create new members
-      }
-      
-      for (const member of importedMembers) {
-        // Note: Removed the skip logic for members with same name as current user
-        // We want to create all imported members, including those with same name as group leader
-
-        // Note: Removed the check for existing members in displayableMembers list
-        // to allow recreating members that already exist
-
-        try {
-          console.log(`Creating member: ${member.name}`);
-          const response = await fetch('/api/members?allowDuplicates=true', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              name: member.name,
-              email: member.email,
-              phone: member.phone,
-            }),
-          });
-
-          console.log(`API response for ${member.name}:`, response.status, response.statusText);
-
-          if (response.ok) {
-            const newMember = await response.json();
-            console.log(`Successfully created member:`, newMember);
-            createdMembers.push({ id: newMember.id, name: newMember.name });
-          } else {
-            console.log(`Failed response headers:`, response.headers);
-            console.log(`Failed response status:`, response.status);
-            
-            let errorData;
-            let errorMessage = 'Unknown error';
-            
-            try {
-              const responseText = await response.text();
-              console.log(`Raw response text:`, responseText);
-              
-              if (responseText) {
-                try {
-                  errorData = JSON.parse(responseText);
-                  
-                  // Don't treat "already exists" as an error for logging purposes
-                  if (response.status === 409 && errorData.error?.includes('already exists')) {
-                    console.log(`Member ${member.name} already exists - skipping`);
-                  } else {
-                    console.error(`Failed to create member ${member.name}:`, errorData);
-                  }
-                  
-                  errorMessage = errorData.error || errorData.message || 'Unknown error';
-                } catch (parseError) {
-                  console.error(`Failed to parse error response as JSON:`, parseError);
-                  errorMessage = responseText || `HTTP ${response.status}: ${response.statusText}`;
-                }
-              } else {
-                errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-              }
-            } catch (textError) {
-              console.error(`Failed to read response text:`, textError);
-              errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-            }
-            
-            errors.push(`${member.name}: ${errorMessage}`);
-          }
-        } catch (error) {
-          console.error(`Failed to create member ${member.name}:`, error);
-          errors.push(`${member.name}: Failed to create`);
-        }
-      }
-
-      console.log(`Created ${createdMembers.length} members, ${errors.length} errors`);
-
-      // Determine what happened and provide appropriate feedback
-      const totalProcessed = createdMembers.length + errors.length;
-      const allExisting = errors.length === importedMembers.length && errors.length > 0;
-      
-      console.log(`Total processed: ${totalProcessed}, All existing: ${allExisting}`);
-
-      // Always proceed to step 3, regardless of whether members were created or already existed
-      const shouldNavigateToStep3 = true;
-
-      if (createdMembers.length > 0) {
-        console.log(`Successfully created ${createdMembers.length} members`);
-        console.log('About to update state and navigate...');
-        
-        // Immediately update the UI state to show success and navigate
-        setMemberImportStatus(`Successfully created ${createdMembers.length} member(s).`);
-        
-        // Add created members to the displayable members immediately
-        console.log('Adding members to displayable list...');
-        setDisplayableMembers(prev => {
-          const updated = [...prev, ...createdMembers];
-          console.log('Updated displayable members:', updated.length);
-          return updated;
-        });
-
-        // Add created members to the form
-        console.log('Adding members to form...');
-        createdMembers.forEach(member => {
-          const importedMember = importedMembers.find(im => im.name === member.name);
-          append({
-            memberId: member.id,
-            name: member.name,
-            currentShare: 0,
-            currentLoanAmount: importedMember?.loanAmount || 0,
-          });
-        });
-        
-        // Clean up import UI immediately
-        console.log('Cleaning up import UI...');
-        setImportedMembers([]);
-        setShowImportedMembers(false);
-        setShowMemberImport(false);
-        
-        // CRITICAL: Navigate to Step 3 immediately - this must happen synchronously
-        console.log('Current step before navigation:', currentStep);
-        console.log('Component still mounted:', isMountedRef.current);
-        
-        // Force immediate step change
-        setCurrentStep(3);
-        
-        // Schedule the async member list refresh for later (non-blocking)
-        // TEMPORARILY DISABLED TO TEST NAVIGATION ISSUE
-        /*
-        if (onMemberCreated && isMountedRef.current) {
-          console.log('Scheduling member list refresh...');
-          setTimeout(async () => {
-            try {
-              if (isMountedRef.current) {
-                console.log('Refreshing members list after successful creation');
-                await onMemberCreated();
-                console.log('Members list refresh completed');
-              } else {
-                console.log('Component unmounted, skipping refresh');
-              }
-            } catch (error) {
-              console.error('Error refreshing members list:', error);
-            }
-          }, 1000); // Increase delay even more
-        }
-        */
-        console.log('Member refresh callback disabled for testing');
-      } else if (allExisting) {
-        // All members already exist - this is actually OK, we should still proceed
-        console.log('All members already exist in the system');
-        setMemberImportStatus(`All ${errors.length} members already exist in the system. Proceeding to assign them to the group.`);
-        
-        // Clean up import UI 
-        console.log('Cleaning up import UI for existing members...');
-        setImportedMembers([]);
-        setShowImportedMembers(false);
-        setShowMemberImport(false);
-      } else {
-        // Mixed results or other cases
-        console.log('Mixed results or other case, still proceeding to step 3');
-        setMemberImportStatus(`Processed ${totalProcessed} members: ${createdMembers.length} created, ${errors.length} had issues.`);
-        
-        // Clean up import UI 
-        setImportedMembers([]);
-        setShowImportedMembers(false);
-        setShowMemberImport(false);
-      }
-
-      // ALWAYS navigate to Step 3 regardless of creation results
-      if (shouldNavigateToStep3) {
-        // Force immediate step change
-        setCurrentStep(3);
-      }
-
-      // Handle errors with appropriate messaging
-      if (errors.length > 0) {
-        if (allExisting) {
-          setMemberImportError(`Note: All ${errors.length} members already exist in the system.`);
-        } else {
-          setMemberImportError(`Errors encountered: ${errors.join(', ')}`);
-        }
-      }
-
-    } catch (error) {
-      console.error('Error creating members:', error);
-      setMemberImportError('Failed to create members. Please try again.');
-      setMemberImportStatus(null);
-      
-      // Don't clear the UI on error so user can retry
-      // setImportedMembers([]);
-      // setShowImportedMembers(false);
-      // setShowMemberImport(false);
-    } finally {
-      // Always reset the loading state
-      setIsCreatingMembers(false);
-    }
-  }, [importedMembers, isCreatingMembers, displayableMembers, session?.user?.memberId, session?.user?.name, currentStep, isMountedRef, append]);
-
   return (
     <div className="max-w-3xl mx-auto">
       {/* Progress indicator */}
@@ -4001,9 +3859,9 @@ The PDF may contain scanned images or use an unsupported format.
               </div>
               <span className="text-xs">
                 {index === 0 ? 'Basic Info' : 
-                 index === 1 ? 'Import Members' :
-                 index === 2 ? 'Select Members' :
-                 'Current Financial Data'}
+                 index === 1 ? 'Member Setup' :
+                 index === 2 ? 'Financial Data' :
+                 'Review & Create'}
               </span>
             </div>
           ))}
