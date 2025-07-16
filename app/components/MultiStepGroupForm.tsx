@@ -1317,9 +1317,25 @@ The PDF may contain scanned images or use an unsupported format.
         console.log('🔧 [TIER_BASED FIX] Transformed tier rules:', JSON.stringify(tierRules, null, 2));
       }
 
-      // Step 3: Create group submission data
+      // Step 3: Create group  data
+      // IMPORTANT: Resolve leader ID if it's a temporary ID
+      const resolvedLeaderId = memberIdMapping[data.leaderId] || data.leaderId;
+      
+      // Debug logging for leader ID resolution
+      console.log('🔧 Leader ID Resolution:');
+      console.log('   Original leaderId:', data.leaderId);
+      console.log('   Is temporary ID:', data.leaderId.startsWith('temp_'));
+      console.log('   Member ID mapping:', memberIdMapping);
+      console.log('   Resolved leaderId:', resolvedLeaderId);
+      
+      // Validate that the leader ID has been properly resolved
+      if (resolvedLeaderId.startsWith('temp_')) {
+        throw new Error(`Leader ID is still temporary (${resolvedLeaderId}). Please ensure the selected leader member was created successfully before creating the group.`);
+      }
+      
       const submissionData: GroupSubmissionData = {
         ...data,
+        leaderId: resolvedLeaderId, // Use resolved leader ID instead of temporary ID
         dateOfStarting: (data.dateOfStarting instanceof Date ? data.dateOfStarting.toISOString() : new Date(data.dateOfStarting).toISOString()),
         collectionFrequency: data.collectionFrequency || 'MONTHLY', 
         lateFineRule: transformedLateFineRule, // Use the transformed late fine rule
