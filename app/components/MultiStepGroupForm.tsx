@@ -789,6 +789,9 @@ The PDF may contain scanned images or use an unsupported format.
   // State for leader linking notification
   const [leaderLinkingStatus, setLeaderLinkingStatus] = useState<string | null>(null);
   const [showLeaderLinkingNotification, setShowLeaderLinkingNotification] = useState(false);
+  
+  // State for controlling whether to subtract LI and GS from group standing
+  const [subtractLIandGS, setSubtractLIandGS] = useState(false);
 
   const totalSteps = 4; // Increased to 4 steps
 
@@ -1030,24 +1033,14 @@ The PDF may contain scanned images or use an unsupported format.
     
     if (selectedNonLeaderMembers.length === nonLeaderMembers.length) {
       // All non-leader members are selected, so deselect all (except leader)
-      const leaderMemberIndex = memberFields.findIndex(field => field.memberId === selectedLeaderId);
-      // Clear all members except keep the leader if they exist
-      if (leaderMemberIndex !== -1) {
-        const leaderMember = memberFields[leaderMemberIndex];
-        // Remove all members
-        for (let i = memberFields.length - 1; i >= 0; i--) {
-          remove(i);
+      const indicesToRemove: number[] = [];
+      memberFields.forEach((field, index) => {
+        if (field.memberId !== selectedLeaderId) {
+          indicesToRemove.push(index);
         }
-        // Re-add only the leader if it exists
-        if (leaderMember) {
-          append(leaderMember);
-        }
-      } else {
-        // Remove all members
-        for (let i = memberFields.length - 1; i >= 0; i--) {
-          remove(i);
-        }
-      }
+      });
+      // Remove in reverse order to maintain correct indices
+      indicesToRemove.reverse().forEach(index => remove(index));
     } else {
       // Not all members are selected, so select all
       nonLeaderMembers.forEach(member => {
@@ -1056,8 +1049,8 @@ The PDF may contain scanned images or use an unsupported format.
           append({
             memberId: member.id,
             name: member.name,
-            currentShare: 0,
             currentLoanAmount: 0,
+            familyMembersCount: 1
           });
         }
       });
@@ -3014,12 +3007,36 @@ The PDF may contain scanned images or use an unsupported format.
     // Calculate total share amount using global share amount
     const totalShareAmount = globalShareAmount * memberFieldsData.length;
     
-    // Calculate total group standing - ensure proper number conversion
-    const totalGroupStanding = roundToTwoDecimals(totalLoanAmount + currentCashInHand + currentBalanceInBank);
-    
     // Calculate additional dynamic insights
     const totalMonthlyCollection = roundToTwoDecimals(monthlyContribution * memberFieldsData.length);
     const monthlyInterestOnLoans = totalLoanAmount > 0 ? roundToTwoDecimals((totalLoanAmount * (interestRate / 100)) / 12) : 0;
+
+    // Calculate Group Social amounts with dynamic updates
+    const groupSocialPerFamily = Number(watchedGroupSocialAmountPerFamilyMember) || 0;
+    const totalFamilyMembers = memberFieldsData.reduce((sum, member) => {
+      const familySize = Number(member.familyMembersCount) || 1;
+      return sum + familySize;
+    }, 0);
+    const calculatedGroupSocialAmount = watchedGroupSocialEnabled ? 
+      roundToTwoDecimals(totalFamilyMembers * groupSocialPerFamily) : 0;
+    const groupSocialPreviousBalance = Number(watchedGroupSocialPreviousBalance) || 0;
+    const totalGroupSocialFund = calculatedGroupSocialAmount + groupSocialPreviousBalance;
+
+    // Calculate Loan Insurance amounts with dynamic updates
+    const loanInsurancePercent = Number(watchedLoanInsurancePercent) || 0;
+    const calculatedLoanInsuranceAmount = watchedLoanInsuranceEnabled ? 
+      roundToTwoDecimals(totalLoanAmount * (loanInsurancePercent / 100)) : 0;
+    const loanInsurancePreviousBalance = Number(watchedLoanInsurancePreviousBalance) || 0;
+    const totalLoanInsuranceFund = calculatedLoanInsuranceAmount + loanInsurancePreviousBalance;
+
+    // Calculate total group standing
+    const baseGroupStanding = roundToTwoDecimals(totalLoanAmount + currentCashInHand + currentBalanceInBank);
+    const finalGroupStanding = subtractLIandGS ? 
+      roundToTwoDecimals(baseGroupStanding - totalGroupSocialFund - totalLoanInsuranceFund) : 
+      baseGroupStanding;
+    
+    // For backward compatibility, also define totalGroupStanding
+    const totalGroupStanding = finalGroupStanding;
 
     return (
       <div className="card p-6">
@@ -3171,9 +3188,7 @@ The PDF may contain scanned images or use an unsupported format.
                       type="checkbox"
                       id="groupSocialEnabled"
                       checked={field.value || false}
-                      onChange={(e) => {
-                        field.onChange(e.target.checked);
-                      }}
+                      onChange={(e) => field.onChange(e.target.checked)}
                       className="mr-2"
                     />
                     <label htmlFor="groupSocialEnabled" className="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -3612,7 +3627,21 @@ The PDF may contain scanned images or use an unsupported format.
 
           {/* Auto-calculated Total Group Standing */}
           <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg border border-green-200 dark:border-green-800">
-            <h3 className="text-lg font-medium text-green-900 dark:text-green-100 mb-2">Auto-Calculated Summary</h3>
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="text-lg font-medium text-green-900 dark:text-green-100">Auto-Calculated Summary</h3>
+              <div className="flex items-center">
+                <input
+                  type="checkbox"
+                  id="subtractFunds"
+                  checked={subtractLIandGS}
+                  onChange={(e) => setSubtractLIandGS(e.target.checked)}
+                  className="mr-2 h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300 rounded"
+                />
+                <label htmlFor="subtractFunds" className="text-sm font-medium text-green-900 dark:text-green-100">
+                  Subtract LI & GS from Standing
+                </label>
+              </div>
+            </div>
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-gray-700 dark:text-gray-300">Total Share Amount (all members):</span>
@@ -3646,6 +3675,18 @@ The PDF may contain scanned images or use an unsupported format.
                 <div className="flex justify-between">
                   <span className="text-gray-700 dark:text-gray-300">Monthly Interest on Loans ({interestRate}% p.a.):</span>
                   <span className="font-medium text-gray-900 dark:text-gray-100">₹{monthlyInterestOnLoans.toFixed(2)}</span>
+                </div>
+              )}
+              {watchedGroupSocialEnabled && (
+                <div className="flex justify-between">
+                  <span className="text-gray-700 dark:text-gray-300">Total GS Fund:</span>
+                  <span className="font-medium text-gray-900 dark:text-gray-100">₹{totalGroupSocialFund.toFixed(2)}</span>
+                </div>
+              )}
+              {watchedLoanInsuranceEnabled && (
+                <div className="flex justify-between">
+                  <span className="text-gray-700 dark:text-gray-300">Total LI Fund:</span>
+                  <span className="font-medium text-gray-900 dark:text-gray-100">₹{totalLoanInsuranceFund.toFixed(2)}</span>
                 </div>
               )}
               <hr className="border-green-200 dark:border-green-700" />
@@ -3835,7 +3876,7 @@ The PDF may contain scanned images or use an unsupported format.
         </div>
       </div>
     );
-  }, [watchedCashInHand, watchedBalanceInBank, watchedGlobalShareAmount, watchedMembers, collectionFrequency, watchedInterestRate, watchedMonthlyContribution, watchedGroupSocialEnabled, watchedGroupSocialAmountPerFamilyMember, watchedLoanInsuranceEnabled, watchedLoanInsurancePercent, watchedGroupSocialPreviousBalance, watchedLoanInsurancePreviousBalance, watchedIncludeDataTillCurrentPeriod, control, errors, memberFields, getShareLabel, setValue, watch]); // Dependencies for useMemo
+  }, [watchedCashInHand, watchedBalanceInBank, watchedGlobalShareAmount, watchedMembers, collectionFrequency, watchedInterestRate, watchedMonthlyContribution, watchedGroupSocialEnabled, watchedGroupSocialAmountPerFamilyMember, watchedLoanInsuranceEnabled, watchedLoanInsurancePercent, watchedGroupSocialPreviousBalance, watchedLoanInsurancePreviousBalance, watchedIncludeDataTillCurrentPeriod, control, errors, memberFields, getShareLabel, setValue, watch, subtractLIandGS]); // Dependencies for useMemo
 
   // Duplicate function removed - using definition above
 
