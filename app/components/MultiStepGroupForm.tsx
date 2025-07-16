@@ -17,6 +17,41 @@ import { roundToTwoDecimals } from '@/app/lib/currency-utils';
 // Import CollectionFrequency from Prisma client
 import { CollectionFrequency } from '@prisma/client';
 
+// Component for real-time Group Social calculation that updates automatically
+function GroupSocialCalculation({ watchedMembers, watchedGroupSocialAmountPerFamilyMember, watch }) {
+  // DIAGNOSTIC LOG 3: Check if inline calculation is re-executing
+  console.log('🔍 DIAGNOSTIC 3 - INLINE CALC EXECUTION:');
+  console.log('   Inline calc timestamp:', new Date().toISOString());
+  
+  // FIXED: Use direct watch calls for individual family member counts to ensure real-time updates
+  const memberFieldsData = watchedMembers || [];
+  let totalFamilyMembers = 0;
+  
+  // Calculate family members using direct watch calls for each member
+  memberFieldsData.forEach((member, index) => {
+    const familySize = watch(`members.${index}.familyMembersCount`) || 1;
+    totalFamilyMembers += familySize;
+  });
+  
+  const calculatedAmount = ((watchedGroupSocialAmountPerFamilyMember || 0) * totalFamilyMembers);
+  
+  // DEBUG LOG - Enhanced inline calculation with direct watch
+  console.log('🎯 Group Social inline calc (DIRECT WATCH):');
+  console.log('   memberFieldsData count:', memberFieldsData.length);
+  console.log('   Direct watch family details:', memberFieldsData.map((m, idx) => ({ 
+    index: idx, 
+    name: m.name, 
+    directWatchFamilySize: watch(`members.${idx}.familyMembersCount`),
+    memberObjectFamilySize: m.familyMembersCount
+  })));
+  console.log('   totalFamilyMembers (direct watch):', totalFamilyMembers);
+  console.log('   watchedGroupSocialAmountPerFamilyMember:', watchedGroupSocialAmountPerFamilyMember);
+  console.log('   calculatedAmount (direct watch):', calculatedAmount);
+  console.log('   EXPECTED CHANGE: Should update immediately when family sizes change');
+  
+  return <>₹{calculatedAmount.toFixed(2)}</>;
+}
+
 // Define enums for form validation
 const dayOfWeekEnum = z.enum(["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]);
 const lateFineRuleTypeEnum = z.enum(["DAILY_FIXED", "DAILY_PERCENTAGE", "TIER_BASED"]);
@@ -947,12 +982,20 @@ The PDF may contain scanned images or use an unsupported format.
       const leaderIndex = memberFields.findIndex(field => field.memberId === selectedLeaderId);
 
       if (leaderIndex === -1) {
+        // Get imported loan amount if available
+        const importedLoanAmount = (leaderMember as any)?.loanAmount || 0;
+        
+        console.log(`🔍 Auto-adding leader ${leaderMember.name}:`, {
+          memberId: leaderMember.id,
+          importedLoanAmount
+        });
+        
         // Add leader if not present
         append({ 
           memberId: leaderMember.id, 
           name: leaderMember.name, 
           currentShare: 0,
-          currentLoanAmount: 0
+          currentLoanAmount: importedLoanAmount // Use imported loan amount
         });
       } else {
         // Ensure leader's name is up-to-date if already present (shouldn't happen often)
@@ -1011,12 +1054,25 @@ The PDF may contain scanned images or use an unsupported format.
   const toggleMember = (memberId: string, memberName: string) => {
     const memberIndex = memberFields.findIndex(field => field.memberId === memberId);
 
-    if (memberIndex === -1) {        // Add member with default current month data
+    if (memberIndex === -1) {
+        // Find the member in displayableMembers to get their imported loan amount
+        const memberInfo = displayableMembers.find(m => m.id === memberId);
+        const importedLoanAmount = (memberInfo as any)?.loanAmount || 0;
+        
+        // DEBUG: Log the loan amount being set
+        console.log(`🔍 Adding member ${memberName}:`, {
+          memberId,
+          importedLoanAmount,
+          memberInfo
+        });
+        
+        // Add member with imported loan amount or default current month data
         append({
           memberId,
           name: memberName,
           currentShare: 0,
-          currentLoanAmount: 0,  
+          currentLoanAmount: importedLoanAmount, // Use imported loan amount instead of 0
+          familyMembersCount: 1
         });
     } else {
       // Remove member (unless it's the leader)
@@ -1031,7 +1087,7 @@ The PDF may contain scanned images or use an unsupported format.
     const nonLeaderMembers = displayableMembers.filter(member => member.id !== selectedLeaderId);
     const selectedNonLeaderMembers = memberFields.filter(field => field.memberId !== selectedLeaderId);
     
-    if (selectedNonLeaderMembers.length === nonLeaderMembers.length) {
+    if (selectedNonLeaderMembers.length === nonLeaderMembers.length && nonLeaderMembers.length > 0) {
       // All non-leader members are selected, so deselect all (except leader)
       const indicesToRemove: number[] = [];
       memberFields.forEach((field, index) => {
@@ -1043,13 +1099,25 @@ The PDF may contain scanned images or use an unsupported format.
       indicesToRemove.reverse().forEach(index => remove(index));
     } else {
       // Not all members are selected, so select all
+      // First, get currently selected member IDs to avoid duplicates
+      const currentlySelectedIds = new Set(memberFields.map(field => field.memberId));
+      
       nonLeaderMembers.forEach(member => {
-        const isAlreadySelected = memberFields.some(field => field.memberId === member.id);
-        if (!isAlreadySelected) {
+        // Only add if not already selected
+        if (!currentlySelectedIds.has(member.id)) {
+          // Get imported loan amount if available
+          const importedLoanAmount = (member as any)?.loanAmount || 0;
+          
+          console.log(`🔍 Adding member via Select All ${member.name}:`, {
+            memberId: member.id,
+            importedLoanAmount
+          });
+          
           append({
             memberId: member.id,
             name: member.name,
-            currentLoanAmount: 0,
+            currentShare: 0,
+            currentLoanAmount: importedLoanAmount, // Use imported loan amount
             familyMembersCount: 1
           });
         }
@@ -1061,7 +1129,16 @@ The PDF may contain scanned images or use an unsupported format.
   const areAllMembersSelected = () => {
     const nonLeaderMembers = displayableMembers.filter(member => member.id !== selectedLeaderId);
     const selectedNonLeaderMembers = memberFields.filter(field => field.memberId !== selectedLeaderId);
-    return nonLeaderMembers.length > 0 && selectedNonLeaderMembers.length === nonLeaderMembers.length;
+    
+    // If there are no non-leader members, return false to show "Select All"
+    if (nonLeaderMembers.length === 0) {
+      return false;
+    }
+    
+    // Check if every non-leader member is in the selected members list
+    return nonLeaderMembers.every(member => 
+      memberFields.some(field => field.memberId === member.id)
+    ) && selectedNonLeaderMembers.length === nonLeaderMembers.length;
   };
 
   const goToNextStep = async () => {
@@ -2892,24 +2969,30 @@ The PDF may contain scanned images or use an unsupported format.
             {initialAvailableMembers.length === 0 && !showCreateMemberForm && (
                  <p className="text-sm text-gray-500 dark:text-gray-400">No members available. You can create one above.</p>
             )}
-            {displayableMembers.map((member) => (
-              <div key={member.id} className="flex items-center">
-                <input
-                  type="checkbox"
-                  id={`member-select-${member.id}`}
-                  checked={memberFields.some(field => field.memberId === member.id) || member.id === selectedLeaderId}
-                  disabled={member.id === selectedLeaderId} // Disable checkbox for the leader
-                  onChange={() => toggleMember(member.id, member.name)}
-                  className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 dark:border-gray-600 rounded"
-                />
-                <label
-                  htmlFor={`member-select-${member.id}`}
-                  className="ml-2 block text-sm text-gray-900 dark:text-gray-100"
-                >
-                  {member.name} {member.id === selectedLeaderId ? "(Leader)" : ""}
-                </label>
-              </div>
-            ))}
+            {displayableMembers.map((member) => {
+              const isSelected = memberFields.some(field => field.memberId === member.id);
+              const isLeader = member.id === selectedLeaderId;
+              const isChecked = isSelected || isLeader;
+              
+              return (
+                <div key={member.id} className="flex items-center">
+                  <input
+                    type="checkbox"
+                    id={`member-select-${member.id}`}
+                    checked={isChecked}
+                    disabled={isLeader} // Disable checkbox for the leader
+                    onChange={() => toggleMember(member.id, member.name)}
+                    className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 dark:border-gray-600 rounded"
+                  />
+                  <label
+                    htmlFor={`member-select-${member.id}`}
+                    className="ml-2 block text-sm text-gray-900 dark:text-gray-100"
+                  >
+                    {member.name} {isLeader ? "(Leader)" : ""}
+                  </label>
+                </div>
+              );
+            })}
           </div>
           {errors.members && <p className="mt-1 text-sm text-red-500">{errors.members.message}</p>}
         </div>
@@ -2971,7 +3054,7 @@ The PDF may contain scanned images or use an unsupported format.
       </div>
     </div>
   // eslint-disable-next-line react-hooks/exhaustive-deps -- Complex component with many interdependent state variables and functions
-  ), [register, errors, control, displayableMembers]);
+  ), [register, errors, control, displayableMembers, memberFields, selectedLeaderId, showCreateMemberForm, newMemberName, newMemberEmail, newMemberPhone, newMemberLoan, createMemberError, isCreatingMember, showLeaderLinkingNotification, leaderLinkingStatus]);
 
   // Step 4: Review & Create (Final submission creates members and group)
   // Watch specific values for dynamic updates
@@ -2989,6 +3072,40 @@ The PDF may contain scanned images or use an unsupported format.
   const watchedLoanInsurancePreviousBalance = watch('loanInsurancePreviousBalance');
   const watchedIncludeDataTillCurrentPeriod = watch('includeDataTillCurrentPeriod');
 
+  // Watch individual family member counts to ensure Step4 re-renders when they change
+  const watchedFamilyMemberCounts = (watchedMembers || []).map((_, index) => 
+    watch(`members.${index}.familyMembersCount`)
+  );
+
+  // Watch individual loan amounts to ensure Step4 re-renders when they change
+  const watchedLoanAmounts = (watchedMembers || []).map((_, index) => 
+    watch(`members.${index}.currentLoanAmount`)
+  );
+
+  // DEBUG EFFECT - Monitor all watch variable changes
+  useEffect(() => {
+    // DIAGNOSTIC LOG 4: Check if component re-renders when watch variables change
+    console.log('🔍 DIAGNOSTIC 4 - COMPONENT RE-RENDER:');
+    console.log('   Component re-render timestamp:', new Date().toISOString());
+    console.log('🔍 WATCH VARIABLES UPDATE:');
+    console.log('   watchedMembers length:', (watchedMembers || []).length);
+    console.log('   watchedMembers detail:', watchedMembers?.map(m => ({ 
+      name: m.name, 
+      familySize: m.familyMembersCount, 
+      loanAmount: m.currentLoanAmount 
+    })));
+    console.log('   watchedGroupSocialEnabled:', watchedGroupSocialEnabled);
+    console.log('   watchedGroupSocialAmountPerFamilyMember:', watchedGroupSocialAmountPerFamilyMember);
+    console.log('   watchedLoanInsuranceEnabled:', watchedLoanInsuranceEnabled);
+    console.log('   watchedLoanInsurancePercent:', watchedLoanInsurancePercent);
+    console.log('   watchedGroupSocialPreviousBalance:', watchedGroupSocialPreviousBalance);
+    console.log('   watchedLoanInsurancePreviousBalance:', watchedLoanInsurancePreviousBalance);
+  }, [watchedMembers, watchedGroupSocialEnabled, watchedGroupSocialAmountPerFamilyMember, 
+      watchedLoanInsuranceEnabled, watchedLoanInsurancePercent, 
+      watchedGroupSocialPreviousBalance, watchedLoanInsurancePreviousBalance]);
+
+  // Simple approach: Remove unnecessary complexity and let React handle re-renders naturally
+
   const Step4 = useMemo(() => {
     const memberFieldsData = watchedMembers || []; // Use watched value
     const currentCashInHand = Number(watchedCashInHand) || 0;
@@ -2997,10 +3114,53 @@ The PDF may contain scanned images or use an unsupported format.
     const interestRate = Number(watchedInterestRate) || 0;
     const monthlyContribution = Number(watchedMonthlyContribution) || 0;
     
+    // DIAGNOSTIC LOG 1: Check if Step4 useMemo is re-executing when fields change
+    console.log('🔍 DIAGNOSTIC 1 - Step4 useMemo RE-EXECUTION:');
+    console.log('   Timestamp:', new Date().toISOString());
+    console.log('   memberFieldsData length:', memberFieldsData.length);
+    
+    // DIAGNOSTIC LOG 2: Test direct watch calls inside useMemo
+    let diagnosticTotalFamilyMembers = 0;
+    memberFieldsData.forEach((member, index) => {
+      const directWatchValue = watch(`members.${index}.familyMembersCount`);
+      const memberObjectValue = member.familyMembersCount;
+      diagnosticTotalFamilyMembers += (directWatchValue || 1);
+      console.log(`   Member ${index} DIAGNOSTIC:`, {
+        name: member.name,
+        directWatch: directWatchValue,
+        memberObject: memberObjectValue,
+        difference: directWatchValue !== memberObjectValue
+      });
+    });
+    console.log('   DIAGNOSTIC totalFamilyMembers (inside useMemo):', diagnosticTotalFamilyMembers);
+    
+    // DEBUG LOGS - Add comprehensive logging to validate assumptions
+    console.log('🔍 Step4 useMemo triggered with dependencies:');
+    console.log('   watchedMembers:', memberFieldsData);
+    console.log('   watchedGroupSocialEnabled:', watchedGroupSocialEnabled);
+    console.log('   watchedGroupSocialAmountPerFamilyMember:', watchedGroupSocialAmountPerFamilyMember);
+    console.log('   watchedLoanInsuranceEnabled:', watchedLoanInsuranceEnabled);
+    console.log('   watchedLoanInsurancePercent:', watchedLoanInsurancePercent);
+    console.log('   watchedGroupSocialPreviousBalance:', watchedGroupSocialPreviousBalance);
+    console.log('   watchedLoanInsurancePreviousBalance:', watchedLoanInsurancePreviousBalance);
+    
     // Calculate total loan amount from all members
-    const totalLoanAmount = memberFieldsData.reduce((sum: number, member) => {
+    const totalLoanAmount = memberFieldsData.reduce((sum: number, member, index) => {
       // Safely extract and convert the loan amount
       const loanAmount = typeof member.currentLoanAmount === 'number' ? member.currentLoanAmount : 0;
+      
+      // DEBUG: Log the first few member objects to understand the structure
+      if (index < 3) {
+        console.log(`🔍 Member ${index} structure:`, {
+          name: member.name,
+          memberId: member.memberId,
+          currentLoanAmount: member.currentLoanAmount,
+          currentShare: member.currentShare,
+          familyMembersCount: member.familyMembersCount,
+          fullObject: member
+        });
+      }
+      
       return sum + loanAmount;
     }, 0);
     
@@ -3028,6 +3188,15 @@ The PDF may contain scanned images or use an unsupported format.
       roundToTwoDecimals(totalLoanAmount * (loanInsurancePercent / 100)) : 0;
     const loanInsurancePreviousBalance = Number(watchedLoanInsurancePreviousBalance) || 0;
     const totalLoanInsuranceFund = calculatedLoanInsuranceAmount + loanInsurancePreviousBalance;
+
+    // DEBUG LOGS - Log calculated values
+    console.log('💰 Calculated values in useMemo:');
+    console.log('   totalLoanAmount:', totalLoanAmount);
+    console.log('   totalFamilyMembers:', totalFamilyMembers);
+    console.log('   calculatedGroupSocialAmount:', calculatedGroupSocialAmount);
+    console.log('   totalGroupSocialFund:', totalGroupSocialFund);
+    console.log('   calculatedLoanInsuranceAmount:', calculatedLoanInsuranceAmount);
+    console.log('   totalLoanInsuranceFund:', totalLoanInsuranceFund);
 
     // Calculate total group standing
     const baseGroupStanding = roundToTwoDecimals(totalLoanAmount + currentCashInHand + currentBalanceInBank);
@@ -3205,24 +3374,27 @@ The PDF may contain scanned images or use an unsupported format.
                       <div>
                         <label htmlFor="groupSocialAmountPerFamilyMember" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                           Amount per Family Member (₹) <span className="text-gray-500 text-sm">(Optional)</span>
-                        </label>
-                        <Controller
-                          name="groupSocialAmountPerFamilyMember"
-                          control={control}
-                          defaultValue={0}
-                          render={({ field: { onChange, onBlur, value, name } }) => (
-                            <input
-                              type="number"
-                              id={name}
-                              value={value || ''}
-                              onChange={e => onChange(parseFloat(e.target.value) || 0)}
-                              onBlur={onBlur}
-                              min="0"
-                              className="mt-1 block w-full max-w-xs px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-green-500 focus:border-green-500"
-                              placeholder="e.g., 50 (Leave 0 if not applicable)"
-                            />
-                          )}
-                        />
+                        </label>                          <Controller
+                            name="groupSocialAmountPerFamilyMember"
+                            control={control}
+                            defaultValue={0}
+                            render={({ field: { onChange, onBlur, value, name } }) => (
+                              <input
+                                type="number"
+                                id={name}
+                                value={value || ''}
+                                onChange={e => {
+                                  const newValue = parseFloat(e.target.value) || 0;
+                                  console.log(`🔄 Group Social amount per family member changing from ${value} to ${newValue}`);
+                                  onChange(newValue);
+                                }}
+                                onBlur={onBlur}
+                                min="0"
+                                className="mt-1 block w-full max-w-xs px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-green-500 focus:border-green-500"
+                                placeholder="e.g., 50 (Leave 0 if not applicable)"
+                              />
+                            )}
+                          />
                         {errors.groupSocialAmountPerFamilyMember && (
                           <p className="mt-1 text-sm text-red-500">{errors.groupSocialAmountPerFamilyMember.message}</p>
                         )}
@@ -3243,12 +3415,11 @@ The PDF may contain scanned images or use an unsupported format.
                                 Calculated Current Period:
                               </label>
                               <p className="text-sm font-medium text-green-700 dark:text-green-300">
-                                ₹{(() => {
-                                  const totalFamilyMembers = memberFieldsData.reduce((sum, member) => {
-                                    return sum + (member.familyMembersCount || 1);
-                                  }, 0);
-                                  return ((watchedGroupSocialAmountPerFamilyMember || 0) * totalFamilyMembers).toFixed(2);
-                                })()}
+                                <GroupSocialCalculation 
+                                  watchedMembers={watchedMembers}
+                                  watchedGroupSocialAmountPerFamilyMember={watchedGroupSocialAmountPerFamilyMember}
+                                  watch={watch}
+                                />
                               </p>
                             </div>
                             <div>
@@ -3318,26 +3489,29 @@ The PDF may contain scanned images or use an unsupported format.
                         <div>
                           <label htmlFor="loanInsurancePercent" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                             Loan Insurance Rate (% per loan amount) <span className="text-red-500">*</span>
-                          </label>
-                          <Controller
-                            name="loanInsurancePercent"
-                            control={control}
-                            defaultValue={0}
-                            render={({ field: { onChange, onBlur, value, name } }) => (
-                              <input
-                                type="number"
-                                id={name}
-                                value={value || ''}
-                                onChange={e => onChange(parseFloat(e.target.value) || 0)}
-                                onBlur={onBlur}
-                                min="0"
-                                max="100"
-                                step="0.1"
-                                className="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-yellow-500 focus:border-yellow-500"
-                                placeholder="e.g., 1.5"
-                              />
-                            )}
-                          />
+                          </label>                            <Controller
+                              name="loanInsurancePercent"
+                              control={control}
+                              defaultValue={0}
+                              render={({ field: { onChange, onBlur, value, name } }) => (
+                                <input
+                                  type="number"
+                                  id={name}
+                                  value={value || ''}
+                                  onChange={e => {
+                                    const newValue = parseFloat(e.target.value) || 0;
+                                    console.log(`🔄 Loan Insurance percent changing from ${value} to ${newValue}`);
+                                    onChange(newValue);
+                                  }}
+                                  onBlur={onBlur}
+                                  min="0"
+                                  max="100"
+                                  step="0.1"
+                                  className="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-yellow-500 focus:border-yellow-500"
+                                  placeholder="e.g., 1.5"
+                                />
+                              )}
+                            />
                           {errors.loanInsurancePercent && (
                             <p className="mt-1 text-sm text-red-500">{errors.loanInsurancePercent.message}</p>
                           )}
@@ -3351,8 +3525,22 @@ The PDF may contain scanned images or use an unsupported format.
                           </label>
                           <p className="text-xl font-medium text-yellow-700 dark:text-yellow-300">
                             ₹{(() => {
+                              // Calculate total loan amount from watchedMembers for real-time updates
+                              const currentMembers = watchedMembers || [];
+                              const realtimeTotalLoanAmount = currentMembers.reduce((sum, member) => {
+                                return sum + (Number(member.currentLoanAmount) || 0);
+                              }, 0);
+                              
                               const loanInsurancePercent = Number(watchedLoanInsurancePercent) || 0;
-                              return (totalLoanAmount * (loanInsurancePercent / 100)).toFixed(2);
+                              const calculatedAmount = (realtimeTotalLoanAmount * (loanInsurancePercent / 100));
+                              
+                              // DEBUG LOG - Inline calculation
+                              console.log('🎯 Loan Insurance inline calc (REAL-TIME):');
+                              console.log('   realtimeTotalLoanAmount:', realtimeTotalLoanAmount);
+                              console.log('   watchedLoanInsurancePercent:', watchedLoanInsurancePercent);
+                              console.log('   calculatedAmount:', calculatedAmount);
+                              
+                              return calculatedAmount.toFixed(2);
                             })()}
                           </p>
                         </div>
@@ -3368,8 +3556,22 @@ The PDF may contain scanned images or use an unsupported format.
                             </label>
                             <p className="text-sm font-medium text-yellow-700 dark:text-yellow-300">
                               ₹{(() => {
+                                // Calculate total loan amount from watchedMembers for real-time updates
+                                const currentMembers = watchedMembers || [];
+                                const realtimeTotalLoanAmount = currentMembers.reduce((sum, member) => {
+                                  return sum + (Number(member.currentLoanAmount) || 0);
+                                }, 0);
+                                
                                 const loanInsurancePercent = Number(watchedLoanInsurancePercent) || 0;
-                                return (totalLoanAmount * (loanInsurancePercent / 100)).toFixed(2);
+                                const calculatedAmount = (realtimeTotalLoanAmount * (loanInsurancePercent / 100));
+                                
+                                // DEBUG LOG - Inline calculation in fund section
+                                console.log('🎯 Loan Insurance Fund inline calc (REAL-TIME):');
+                                console.log('   realtimeTotalLoanAmount (fund):', realtimeTotalLoanAmount);
+                                console.log('   watchedLoanInsurancePercent (fund):', watchedLoanInsurancePercent);
+                                console.log('   calculatedAmount (fund):', calculatedAmount);
+                                
+                                return calculatedAmount.toFixed(2);
                               })()}
                             </p>
                           </div>
@@ -3571,7 +3773,11 @@ The PDF may contain scanned images or use an unsupported format.
                               type="number"
                               id={name}
                               value={value || ''}
-                              onChange={e => onChange(parseFloat(e.target.value) || 0)}
+                              onChange={e => {
+                                const newValue = parseFloat(e.target.value) || 0;
+                                console.log(`🔄 Member ${index} loan amount changing from ${value} to ${newValue}`);
+                                onChange(newValue);
+                              }}
                               onBlur={onBlur}
                               min="0"
                               className="input-field-sm"
@@ -3596,7 +3802,11 @@ The PDF may contain scanned images or use an unsupported format.
                               type="number"
                               id={name}
                               value={value || 1}
-                              onChange={e => onChange(parseInt(e.target.value) || 1)}
+                              onChange={e => {
+                                const newValue = parseInt(e.target.value) || 1;
+                                console.log(`🔄 Member ${index} family size changing from ${value} to ${newValue}`);
+                                onChange(newValue);
+                              }}
                               onBlur={onBlur}
                               min="1"
                               max="20"
@@ -3680,203 +3890,127 @@ The PDF may contain scanned images or use an unsupported format.
               {watchedGroupSocialEnabled && (
                 <div className="flex justify-between">
                   <span className="text-gray-700 dark:text-gray-300">Total GS Fund:</span>
-                  <span className="font-medium text-gray-900 dark:text-gray-100">₹{totalGroupSocialFund.toFixed(2)}</span>
+                  <span className="font-medium text-gray-900 dark:text-gray-100">
+                    ₹{(() => {
+                      // FIXED: Real-time calculation for Total GS Fund using direct watch
+                      const memberFieldsData = watchedMembers || [];
+                      let totalFamilyMembers = 0;
+                      
+                      // Calculate family members using direct watch calls for each member
+                      memberFieldsData.forEach((member, index) => {
+                        const familySize = watch(`members.${index}.familyMembersCount`) || 1;
+                        totalFamilyMembers += familySize;
+                      });
+                      
+                      const groupSocialPerFamily = Number(watchedGroupSocialAmountPerFamilyMember) || 0;
+                      const calculatedGroupSocialAmount = totalFamilyMembers * groupSocialPerFamily;
+                      const groupSocialPreviousBalance = Number(watchedGroupSocialPreviousBalance) || 0;
+                      const totalGSFund = calculatedGroupSocialAmount + groupSocialPreviousBalance;
+                      
+                      // DEBUG LOG - Summary GS calculation with direct watch
+                      console.log('🎯 Total GS Fund summary calc (DIRECT WATCH):');
+                      console.log('   totalFamilyMembers (direct watch summary):', totalFamilyMembers);
+                      console.log('   groupSocialPerFamily (summary):', groupSocialPerFamily);
+                      console.log('   calculatedGroupSocialAmount (direct watch summary):', calculatedGroupSocialAmount);
+                      console.log('   groupSocialPreviousBalance (summary):', groupSocialPreviousBalance);
+                      console.log('   totalGSFund (direct watch summary):', totalGSFund);
+                      
+                      return totalGSFund.toFixed(2);
+                    })()}
+                  </span>
                 </div>
               )}
               {watchedLoanInsuranceEnabled && (
                 <div className="flex justify-between">
                   <span className="text-gray-700 dark:text-gray-300">Total LI Fund:</span>
-                  <span className="font-medium text-gray-900 dark:text-gray-100">₹{totalLoanInsuranceFund.toFixed(2)}</span>
+                  <span className="font-medium text-gray-900 dark:text-gray-100">
+                    ₹{(() => {
+                      // Real-time calculation for Total LI Fund
+                      const currentMembers = watchedMembers || [];
+                      const realtimeTotalLoanAmount = currentMembers.reduce((sum, member) => {
+                        return sum + (Number(member.currentLoanAmount) || 0);
+                      }, 0);
+                      const loanInsurancePercent = Number(watchedLoanInsurancePercent) || 0;
+                      const calculatedLoanInsuranceAmount = realtimeTotalLoanAmount * (loanInsurancePercent / 100);
+                      const loanInsurancePreviousBalance = Number(watchedLoanInsurancePreviousBalance) || 0;
+                      const totalLIFund = calculatedLoanInsuranceAmount + loanInsurancePreviousBalance;
+                      
+                      // DEBUG LOG - Summary LI calculation
+                      console.log('🎯 Total LI Fund summary calc (REAL-TIME):');
+                      console.log('   realtimeTotalLoanAmount (summary):', realtimeTotalLoanAmount);
+                      console.log('   loanInsurancePercent (summary):', loanInsurancePercent);
+                      console.log('   calculatedLoanInsuranceAmount (summary):', calculatedLoanInsuranceAmount);
+                      console.log('   loanInsurancePreviousBalance (summary):', loanInsurancePreviousBalance);
+                      console.log('   totalLIFund (summary):', totalLIFund);
+                      
+                      return totalLIFund.toFixed(2);
+                    })()}
+                  </span>
                 </div>
               )}
               <hr className="border-green-200 dark:border-green-700" />
               <div className="flex justify-between text-lg font-semibold">
                 <span className="text-green-900 dark:text-green-100">Total Group Standing:</span>
-                <span className="text-green-900 dark:text-green-100">₹{totalGroupStanding.toFixed(2)}</span>
+                <span className="text-green-900 dark:text-green-100">
+                  ₹{(() => {
+                    // FIXED: Real-time calculation for Total Group Standing using direct watch
+                    const memberFieldsData = watchedMembers || [];
+                    const currentCashInHandRT = Number(watchedCashInHand) || 0;
+                    const currentBalanceInBankRT = Number(watchedBalanceInBank) || 0;
+                    
+                    // Calculate real-time total loan amount using direct watch
+                    let realtimeTotalLoanAmount = 0;
+                    memberFieldsData.forEach((member, index) => {
+                      const loanAmount = watch(`members.${index}.currentLoanAmount`) || 0;
+                      realtimeTotalLoanAmount += Number(loanAmount);
+                    });
+                    
+                    // Calculate real-time GS fund using direct watch
+                    let totalFamilyMembers = 0;
+                    memberFieldsData.forEach((member, index) => {
+                      const familySize = watch(`members.${index}.familyMembersCount`) || 1;
+                      totalFamilyMembers += familySize;
+                    });
+                    
+                    const groupSocialPerFamily = Number(watchedGroupSocialAmountPerFamilyMember) || 0;
+                    const calculatedGroupSocialAmount = watchedGroupSocialEnabled ? (totalFamilyMembers * groupSocialPerFamily) : 0;
+                    const groupSocialPreviousBalance = Number(watchedGroupSocialPreviousBalance) || 0;
+                    const totalGSFundRT = calculatedGroupSocialAmount + groupSocialPreviousBalance;
+                    
+                    // Calculate real-time LI fund using direct watch loan amounts
+                    const loanInsurancePercent = Number(watchedLoanInsurancePercent) || 0;
+                    const calculatedLoanInsuranceAmount = watchedLoanInsuranceEnabled ? (realtimeTotalLoanAmount * (loanInsurancePercent / 100)) : 0;
+                    const loanInsurancePreviousBalance = Number(watchedLoanInsurancePreviousBalance) || 0;
+                    const totalLIFundRT = calculatedLoanInsuranceAmount + loanInsurancePreviousBalance;
+                    
+                    // Calculate base and final group standing
+                    const baseGroupStanding = realtimeTotalLoanAmount + currentCashInHandRT + currentBalanceInBankRT;
+                    const finalGroupStanding = subtractLIandGS ? 
+                      (baseGroupStanding - totalGSFundRT - totalLIFundRT) : 
+                      baseGroupStanding;
+                    
+                    // DEBUG LOG - Summary Group Standing calculation with direct watch
+                    console.log('🎯 Total Group Standing summary calc (DIRECT WATCH):');
+                    console.log('   realtimeTotalLoanAmount (direct watch standing):', realtimeTotalLoanAmount);
+                    console.log('   currentCashInHandRT (standing):', currentCashInHandRT);
+                    console.log('   currentBalanceInBankRT (standing):', currentBalanceInBankRT);
+                    console.log('   totalFamilyMembers (direct watch standing):', totalFamilyMembers);
+                    console.log('   totalGSFundRT (direct watch standing):', totalGSFundRT);
+                    console.log('   totalLIFundRT (direct watch standing):', totalLIFundRT);
+                    console.log('   subtractLIandGS (standing):', subtractLIandGS);
+                    console.log('   finalGroupStanding (direct watch standing):', finalGroupStanding);
+                    
+                    return finalGroupStanding.toFixed(2);
+                  })()}
+                </span>
               </div>
 
             </div>
           </div>
-
-          {/* New Auto-Calculated Summary - Show only if GS or LI are enabled */}
-          {(watchedGroupSocialEnabled || watchedLoanInsuranceEnabled) && (
-            <div className="bg-gradient-to-br from-indigo-50 to-indigo-100 dark:from-indigo-900/20 dark:to-indigo-800/20 p-4 rounded-lg border border-indigo-200 dark:border-indigo-700">
-              <h3 className="text-lg font-medium text-indigo-900 dark:text-indigo-100 mb-3">Auto-Calculated Summary</h3>
-              <div className="space-y-3 text-sm">
-                {(() => {
-                  // Calculate enhanced totals
-                  const loanInsurancePercent = Number(watchedLoanInsurancePercent) || 0;
-                  const groupSocialPerFamily = Number(watchedGroupSocialAmountPerFamilyMember) || 0;
-                  
-                  // Calculate late fine (simplified for creation - actual calculation depends on overdue days)
-                  const estimatedLateFine = 0; // For creation, this would be 0
-                  
-                  // Calculate loan insurance amount - current period calculation plus previous balance
-                  const calculatedLoanInsuranceAmount = watchedLoanInsuranceEnabled ? 
-                    roundToTwoDecimals(totalLoanAmount * (loanInsurancePercent / 100)) : 0;
-                  const loanInsurancePreviousBalance = Number(watch('loanInsurancePreviousBalance')) || 0;
-                  const totalLoanInsuranceFund = calculatedLoanInsuranceAmount + loanInsurancePreviousBalance;
-                  
-                  // Calculate group social amount - current period calculation plus previous balance
-                  const totalFamilyMembers = memberFieldsData.reduce((sum, member) => {
-                    return sum + (member.familyMembersCount || 1);
-                  }, 0);
-                  const calculatedGroupSocialAmount = watchedGroupSocialEnabled ? 
-                    roundToTwoDecimals(totalFamilyMembers * groupSocialPerFamily) : 0;
-                  const groupSocialPreviousBalance = Number(watch('groupSocialPreviousBalance')) || 0;
-                  const totalGroupSocialFund = calculatedGroupSocialAmount + groupSocialPreviousBalance;
-                  
-                  // Calculate interest paid on personal loans
-                  const interestPaidOnPersonalLoans = interestRate > 0 && totalLoanAmount > 0 ? 
-                    roundToTwoDecimals((totalLoanAmount * (interestRate / 100)) / 12) : 0;
-                  
-                  // Calculate Total Collection as per new formula
-                  const totalCollection = roundToTwoDecimals(
-                    totalMonthlyCollection + 
-                    estimatedLateFine + 
-                    interestPaidOnPersonalLoans + 
-                    calculatedLoanInsuranceAmount + 
-                    calculatedGroupSocialAmount
-                  );
-                  
-                  // Calculate TOTAL Group Standing with new formula
-                  // STANDING = [(Previous Month Balance + Total Collection + Interest Income − Expenses) + Remaining Personal Loan Amount] − Group Social Fund − Loan Insurance Fund
-                  const previousMonthBalance = currentCashInHand + currentBalanceInBank;
-                  const interestIncome = interestPaidOnPersonalLoans; // Same as interest paid
-                  const expenses = 0; // For creation, assume no expenses
-                  const remainingPersonalLoanAmount = totalLoanAmount;
-                  
-                  const totalGroupStanding = roundToTwoDecimals(
-                    (previousMonthBalance + totalCollection + interestIncome - expenses) + 
-                    remainingPersonalLoanAmount - 
-                    totalGroupSocialFund - 
-                    totalLoanInsuranceFund
-                  );
-                  
-                  return (
-                    <>
-                      <div className="bg-white dark:bg-indigo-900/30 p-3 rounded border border-indigo-200 dark:border-indigo-700">
-                        <h4 className="font-medium text-indigo-800 dark:text-indigo-200 mb-2">Total Collection Breakdown</h4>
-                        <div className="space-y-1 text-xs">
-                          <div className="flex justify-between">
-                            <span>Monthly Compulsory Contribution:</span>
-                            <span>₹{totalMonthlyCollection.toFixed(2)}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Late Fine:</span>
-                            <span>₹{estimatedLateFine.toFixed(2)}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Interest Paid (Personal Loans):</span>
-                            <span>₹{interestPaidOnPersonalLoans.toFixed(2)}</span>
-                          </div>
-                          {watchedLoanInsuranceEnabled && (
-                            <div className="flex justify-between">
-                              <span>Loan Insurance ({loanInsurancePercent}%):</span>
-                              <span>₹{calculatedLoanInsuranceAmount.toFixed(2)}</span>
-                            </div>
-                          )}
-                          {watchedGroupSocialEnabled && (
-                            <div className="flex justify-between">
-                              <span>Group Social ({totalFamilyMembers} family members):</span>
-                              <span>₹{calculatedGroupSocialAmount.toFixed(2)}</span>
-                            </div>
-                          )}
-                          <hr className="border-indigo-200 dark:border-indigo-600" />
-                          <div className="flex justify-between font-semibold">
-                            <span>Total Collection:</span>
-                            <span>₹{totalCollection.toFixed(2)}</span>
-                          </div>
-                        </div>
-                      </div>
-                      
-                      <div className="bg-white dark:bg-indigo-900/30 p-3 rounded border border-indigo-200 dark:border-indigo-700">
-                        <h4 className="font-medium text-indigo-800 dark:text-indigo-200 mb-2">TOTAL Group Standing</h4>
-                        <div className="space-y-1 text-xs">
-                          <div className="flex justify-between">
-                            <span>Previous Month Balance:</span>
-                            <span>₹{previousMonthBalance.toFixed(2)}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Total Collection:</span>
-                            <span>₹{totalCollection.toFixed(2)}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Interest Income:</span>
-                            <span>₹{interestIncome.toFixed(2)}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Expenses:</span>
-                            <span>-₹{expenses.toFixed(2)}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Remaining Personal Loan Amount:</span>
-                            <span>₹{remainingPersonalLoanAmount.toFixed(2)}</span>
-                          </div>
-                          <div className="flex justify-between text-red-600 dark:text-red-400">
-                            <span>Total Group Social Fund:</span>
-                            <span>-₹{totalGroupSocialFund.toFixed(2)}</span>
-                          </div>
-                          <div className="flex justify-between text-red-600 dark:text-red-400">
-                            <span>Total Loan Insurance Fund:</span>
-                            <span>-₹{totalLoanInsuranceFund.toFixed(2)}</span>
-                          </div>
-                          <hr className="border-indigo-200 dark:border-indigo-600" />
-                          <div className="flex justify-between font-semibold text-indigo-800 dark:text-indigo-200">
-                            <span>TOTAL Group Standing:</span>
-                            <span>₹{totalGroupStanding.toFixed(2)}</span>
-                          </div>
-                        </div>
-                      </div>
-                      
-                      <div className="bg-white dark:bg-indigo-900/30 p-3 rounded border border-indigo-200 dark:border-indigo-700">
-                        <h4 className="font-medium text-indigo-800 dark:text-indigo-200 mb-2">Fund Details</h4>
-                        <div className="space-y-1 text-xs">
-                          {watchedLoanInsuranceEnabled && (
-                            <>
-                              <div className="flex justify-between">
-                                <span>Previous LI Fund Balance:</span>
-                                <span>₹{loanInsurancePreviousBalance.toFixed(2)}</span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span>Current Period LI:</span>
-                                <span>₹{calculatedLoanInsuranceAmount.toFixed(2)}</span>
-                              </div>
-                              <div className="flex justify-between font-medium text-yellow-700 dark:text-yellow-300">
-                                <span>Total LI Fund:</span>
-                                <span>₹{totalLoanInsuranceFund.toFixed(2)}</span>
-                              </div>
-                              <hr className="border-indigo-200 dark:border-indigo-600" />
-                            </>
-                          )}
-                          {watchedGroupSocialEnabled && (
-                            <>
-                              <div className="flex justify-between">
-                                <span>Previous GS Fund Balance:</span>
-                                <span>₹{groupSocialPreviousBalance.toFixed(2)}</span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span>Current Period GS:</span>
-                                <span>₹{calculatedGroupSocialAmount.toFixed(2)}</span>
-                              </div>
-                              <div className="flex justify-between font-medium text-green-700 dark:text-green-300">
-                                <span>Total Group Social Fund:</span>
-                                <span>₹{totalGroupSocialFund.toFixed(2)}</span>
-                              </div>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </>
-                  );
-                })()}
-              </div>
-            </div>
-          )}
         </div>
       </div>
     );
-  }, [watchedCashInHand, watchedBalanceInBank, watchedGlobalShareAmount, watchedMembers, collectionFrequency, watchedInterestRate, watchedMonthlyContribution, watchedGroupSocialEnabled, watchedGroupSocialAmountPerFamilyMember, watchedLoanInsuranceEnabled, watchedLoanInsurancePercent, watchedGroupSocialPreviousBalance, watchedLoanInsurancePreviousBalance, watchedIncludeDataTillCurrentPeriod, control, errors, memberFields, getShareLabel, setValue, watch, subtractLIandGS]); // Dependencies for useMemo
+  }, [watchedCashInHand, watchedBalanceInBank, watchedGlobalShareAmount, watchedMembers, collectionFrequency, watchedInterestRate, watchedMonthlyContribution, watchedGroupSocialEnabled, watchedGroupSocialAmountPerFamilyMember, watchedLoanInsuranceEnabled, watchedLoanInsurancePercent, watchedGroupSocialPreviousBalance, watchedLoanInsurancePreviousBalance, watchedIncludeDataTillCurrentPeriod, control, errors, memberFields, getShareLabel, setValue, watch, subtractLIandGS, watchedFamilyMemberCounts, watchedLoanAmounts]); // Added individual field watches to ensure re-render when values change
 
   // Duplicate function removed - using definition above
 
