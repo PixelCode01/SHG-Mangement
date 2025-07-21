@@ -1866,11 +1866,11 @@ export default function ContributionTrackingPage() {
       const headerRow = worksheet.addRow(tableHeaders);
       rowNum++;
       
-      headerRow.height = 24;
+      headerRow.height = 28;
       headerRow.eachCell((cell) => {
         cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '4831D4' } };
-        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
         cell.border = {
           top: { style: 'medium', color: { argb: 'FFFFFFFF' } },
           bottom: { style: 'medium', color: { argb: 'FFFFFFFF' } },
@@ -1910,10 +1910,45 @@ export default function ContributionTrackingPage() {
         const row = worksheet.addRow(rowData);
         rowNum++;
         
-        // Format currency cells
+        // Set row height for better spacing and text visibility
+        row.height = 25;
+        
+        // Format currency cells with proper alignment and spacing
+        row.eachCell((cell, colNumber) => {
+          // Align first column (SL) to center
+          if (colNumber === 1) {
+            cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+          }
+          // Align member name to left with padding and text wrapping
+          else if (colNumber === 2) {
+            cell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1, wrapText: true };
+          }
+          // Align currency columns to right with padding and text wrapping
+          else if (colNumber >= 3 && colNumber < rowData.length) {
+            cell.alignment = { horizontal: 'right', vertical: 'middle', indent: 1, wrapText: true };
+            // Format as currency if it's a number
+            if (typeof rowData[colNumber - 1] === 'number') {
+              cell.numFmt = 'Rs. #,##0.00';
+            }
+          }
+          // Align status column to center with text wrapping
+          else {
+            cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+          }
+          
+          // Add borders for better visual separation
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'FFE0E0E0' } },
+            bottom: { style: 'thin', color: { argb: 'FFE0E0E0' } },
+            left: { style: 'thin', color: { argb: 'FFE0E0E0' } },
+            right: { style: 'thin', color: { argb: 'FFE0E0E0' } }
+          };
+        });
+        
+        // Format currency cells (keep existing logic for compatibility)
         for (let i = 3; i < rowData.length - 1; i++) {
           if (typeof rowData[i] === 'number') {
-            row.getCell(i).numFmt = '₹#,##0.00';
+            row.getCell(i).numFmt = 'Rs. #,##0.00';
           }
         }
         
@@ -1960,19 +1995,35 @@ export default function ContributionTrackingPage() {
       const totalsRow = worksheet.addRow(totalsData);
       rowNum++;
       
-      totalsRow.eachCell((cell) => {
-        cell.font = { bold: true };
+      // Set row height for totals row
+      totalsRow.height = 30;
+      
+      totalsRow.eachCell((cell, colNumber) => {
+        cell.font = { bold: true, size: 11 };
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF0F0F0' } };
         cell.border = {
           top: { style: 'medium', color: { argb: 'FF000000' } },
-          bottom: { style: 'medium', color: { argb: 'FF000000' } }
+          bottom: { style: 'medium', color: { argb: 'FF000000' } },
+          left: { style: 'thin', color: { argb: 'FFE0E0E0' } },
+          right: { style: 'thin', color: { argb: 'FFE0E0E0' } }
         };
+        
+        // Align cells properly
+        if (colNumber === 1) {
+          cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        } else if (colNumber === 2) {
+          cell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1, wrapText: true };
+        } else if (colNumber >= 3 && colNumber < totalsData.length) {
+          cell.alignment = { horizontal: 'right', vertical: 'middle', indent: 1, wrapText: true };
+        } else {
+          cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+        }
       });
 
-      // Format currency in totals
+      // Format currency in totals with proper spacing
       for (let i = 3; i < totalsData.length - 1; i++) {
         if (typeof totalsData[i] === 'number') {
-          totalsRow.getCell(i).numFmt = '₹#,##0.00';
+          totalsRow.getCell(i).numFmt = 'Rs. #,##0.00';
         }
       }
 
@@ -2100,9 +2151,40 @@ export default function ContributionTrackingPage() {
         const row = worksheet.addRow(rowData);
         rowNum++;
         
-        // Format currency cells
+        // Set row height for better spacing and text visibility
+        row.height = 22;
+        
+        // Format cells with proper alignment and spacing
+        row.eachCell((cell, colNumber) => {
+          // Description column - left aligned with indent
+          if (colNumber === 1) {
+            cell.alignment = { horizontal: 'left', vertical: 'middle', indent: 1, wrapText: true };
+            cell.font = { size: 10 };
+          }
+          // Amount column - right aligned with indent and currency formatting
+          else if (colNumber === 2 && typeof rowData[1] === 'number' && rowData[1] !== 0) {
+            cell.alignment = { horizontal: 'right', vertical: 'middle', indent: 1, wrapText: true };
+            cell.numFmt = 'Rs. #,##0.00';
+            cell.font = { size: 10 };
+          }
+          // Comment column - left aligned
+          else if (colNumber === 3) {
+            cell.alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
+            cell.font = { size: 9, italic: true, color: { argb: '666666' } };
+          }
+          
+          // Add subtle borders for better visual separation
+          cell.border = {
+            top: { style: 'thin', color: { argb: 'FFF5F5F5' } },
+            bottom: { style: 'thin', color: { argb: 'FFF5F5F5' } },
+            left: { style: 'thin', color: { argb: 'FFF5F5F5' } },
+            right: { style: 'thin', color: { argb: 'FFF5F5F5' } }
+          };
+        });
+        
+        // Format currency cells (maintain existing compatibility)
         if (typeof rowData[1] === 'number' && rowData[1] !== 0) {
-          row.getCell(2).numFmt = '₹#,##0.00';
+          row.getCell(2).numFmt = 'Rs. #,##0.00';
         }
         
         // Style header rows based on exact string matching
@@ -2133,23 +2215,60 @@ export default function ContributionTrackingPage() {
         }
       });
 
-      // Set column widths
+      // Final step: Comprehensive text visibility fix
+      // Set generous column widths to prevent any text cutoff
       worksheet.columns = [
-        { width: 5 },   // SL
-        { width: 30 },  // Description/Name
-        { width: 20 },  // Amount
-        { width: 20 },  // Additional columns
-        { width: 20 },
-        { width: 15 },
-        { width: 15 },
-        { width: 15 },
-        { width: 15 },
-        { width: 15 },
-        { width: 15 },
-        { width: 15 },
-        { width: 15 },
-        { width: 15 }
+        { width: 15, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // SL
+        { width: 80, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Description/Name - extra wide
+        { width: 40, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Amount
+        { width: 40, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Additional columns
+        { width: 40, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Loan Interest
+        { width: 35, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Late Fine
+        { width: 40, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Loan Insurance
+        { width: 35, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Group Social
+        { width: 40, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Total Expected
+        { width: 30, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Status
+        { width: 40, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Extra columns
+        { width: 40, style: { alignment: { wrapText: true, vertical: 'middle' } } },
+        { width: 40, style: { alignment: { wrapText: true, vertical: 'middle' } } },
+        { width: 80, style: { alignment: { wrapText: true, vertical: 'middle' } } }   // Description column - extra wide
       ];
+      
+      // Ensure all cells have proper text wrapping and alignment
+      worksheet.eachRow((row, rowNumber) => {
+        row.eachCell((cell, colNumber) => {
+          // Ensure cell has alignment object
+          if (!cell.alignment) {
+            cell.alignment = {};
+          }
+          
+          // Enable text wrapping for all cells
+          cell.alignment.wrapText = true;
+          cell.alignment.vertical = 'middle';
+          
+          // Set specific alignment based on column type
+          if (colNumber === 1) {
+            // SL column - center aligned
+            cell.alignment.horizontal = 'center';
+          } else if (colNumber === 2) {
+            // Name/Description column - left aligned with indent
+            cell.alignment.horizontal = 'left';
+            cell.alignment.indent = 1;
+          } else if (colNumber >= 3 && colNumber <= 9) {
+            // Currency/number columns - right aligned with indent
+            cell.alignment.horizontal = 'right';
+            cell.alignment.indent = 1;
+          } else {
+            // Status and other columns - center aligned
+            cell.alignment.horizontal = 'center';
+          }
+        });
+        
+        // Ensure adequate row height for text wrapping
+        if (row.height < 25) {
+          row.height = 25;
+        }
+      });
 
       // Generate and download Excel file
       const buffer = await workbook.xlsx.writeBuffer();
