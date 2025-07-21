@@ -1495,213 +1495,553 @@ export default function ContributionTrackingPage() {
     // They will follow the same cash allocation pattern as the main payment
   };
 
-  // Function to generate CSV report with loan insurance and group social support
+  // Function to generate comprehensive CSV report with all fields and proper formatting
   const generateCSVReport = () => {
     if (!group) return;
     
-    // Helper function to format period name
-    const formatPeriodName = (period: any) => {
-      if (!period) return 'Current Period';
-      
-      const frequency = group.collectionFrequency || 'MONTHLY';
-      const startDate = new Date(period.startDate);
-      
-      if (frequency === 'MONTHLY') {
-        return startDate.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
-      } else if (frequency === 'WEEKLY') {
-        return `Week of ${startDate.toLocaleDateString('en-IN')}`;
-      } else if (frequency === 'YEARLY') {
-        return startDate.toLocaleDateString('en-IN', { year: 'numeric' });
-      } else {
-        return `${startDate.toLocaleDateString('en-IN')} to ${new Date().toLocaleDateString('en-IN')}`;
-      }
-    };
-    
     try {
-      // Calculate all financial data
-      const totalExpected = memberContributions.reduce((sum, c) => sum + (c.totalExpected || 0), 0);
-      const totalCollected = memberContributions.reduce((sum, c) => sum + (c.paidAmount || 0), 0);
-      const totalCompulsoryContribution = memberContributions.reduce((sum, c) => sum + (c.expectedContribution || 0), 0);
-      const totalInterestPaid = memberContributions.reduce((sum, c) => sum + (c.expectedInterest || 0), 0);
-      const totalLateFines = memberContributions.reduce((sum, c) => sum + (c.lateFineAmount || 0), 0);
-      const totalLoanInsurance = memberContributions.reduce((sum, c) => sum + (c.loanInsuranceAmount || 0), 0);
-      const totalGroupSocial = memberContributions.reduce((sum, c) => sum + (c.groupSocialAmount || 0), 0);
-      const totalPersonalLoanOutstanding = memberContributions.reduce((sum, c) => sum + (c.currentLoanBalance || 0), 0);
-      
-      // Calculate cash allocation totals
-      const totalCashInHand = Object.values(actualContributions).reduce((sum, record) => {
-        if (record.cashAllocation) {
-          try {
-            const allocation = JSON.parse(record.cashAllocation);
-            return sum + (allocation.contributionToCashInHand || 0) + (allocation.interestToCashInHand || 0);
-          } catch (_e) { return sum; }
-        }
-        return sum + Math.ceil((record.totalPaid || 0) * 0.3); // Default 30% to cash
-      }, 0);
-      
-      const totalCashInBank = Object.values(actualContributions).reduce((sum, record) => {
-        if (record.cashAllocation) {
-          try {
-            const allocation = JSON.parse(record.cashAllocation);
-            return sum + (allocation.contributionToCashInBank || 0) + (allocation.interestToCashInBank || 0);
-          } catch (_e) { return sum; }
-        }
-        return sum + Math.ceil((record.totalPaid || 0) * 0.7); // Default 70% to bank
-      }, 0);
+      // Helper function to format currency for CSV
+      const formatCurrencyCSV = (amount: number | undefined | null): string => {
+        const numValue = Number(amount);
+        if (isNaN(numValue)) return '0.00';
+        return numValue.toFixed(2);
+      };
 
-      // Create dynamic headers based on enabled features
-      const headers = ['SL', 'Member Name', 'Compulsory Contribution'];
+      // Helper function to format period name
+      const formatPeriodName = (period: any) => {
+        if (!period) return 'Current Period';
+        
+        const frequency = group.collectionFrequency || 'MONTHLY';
+        const startDate = new Date(period.startDate);
+        
+        if (frequency === 'MONTHLY') {
+          return startDate.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+        } else if (frequency === 'WEEKLY') {
+          return `Week of ${startDate.toLocaleDateString('en-IN')}`;
+        } else if (frequency === 'YEARLY') {
+          return startDate.toLocaleDateString('en-IN', { year: 'numeric' });
+        } else {
+          return `${startDate.toLocaleDateString('en-IN')} to ${new Date().toLocaleDateString('en-IN')}`;
+        }
+      };
+
+      // Helper function to get member collection data
+      const getMemberCollectionData = (memberId: string) => {
+        const collection = memberCollections[memberId];
+        if (!collection) return {
+          compulsoryPaid: 0,
+          interestPaid: 0,
+          lateFinePaid: 0,
+          loanInsurancePaid: 0,
+          groupSocialPaid: 0,
+          loanRepayment: 0,
+          cashAmount: 0,
+          bankAmount: 0
+        };
+        
+        return {
+          compulsoryPaid: collection.compulsoryContribution || 0,
+          interestPaid: collection.interestPaid || 0,
+          lateFinePaid: collection.lateFinePaid || 0,
+          loanInsurancePaid: collection.loanInsurancePaid || 0,
+          groupSocialPaid: collection.groupSocialPaid || 0,
+          loanRepayment: collection.loanRepayment || 0,
+          cashAmount: collection.cashAmount || 0,
+          bankAmount: collection.bankAmount || 0
+        };
+      };
+
+      // Calculate all financial data
+      const totalExpectedContribution = memberContributions.reduce((sum, c) => sum + (c.expectedContribution || 0), 0);
+      const totalExpectedInterest = memberContributions.reduce((sum, c) => sum + (c.expectedInterest || 0), 0);
+      const totalExpectedLateFines = memberContributions.reduce((sum, c) => sum + (c.lateFineAmount || 0), 0);
+      const totalExpectedLoanInsurance = memberContributions.reduce((sum, c) => sum + (c.loanInsuranceAmount || 0), 0);
+      const totalExpectedGroupSocial = memberContributions.reduce((sum, c) => sum + (c.groupSocialAmount || 0), 0);
+      const totalExpected = memberContributions.reduce((sum, c) => sum + (c.totalExpected || 0), 0);
+      const totalPersonalLoanOutstanding = memberContributions.reduce((sum, c) => sum + (c.currentLoanBalance || 0), 0);
+
+      // Calculate actual paid amounts
+      let totalPaidContribution = 0;
+      let totalPaidInterest = 0;
+      let totalPaidLateFines = 0;
+      let totalPaidLoanInsurance = 0;
+      let totalPaidGroupSocial = 0;
+      let totalLoanRepayments = 0;
+      let totalCashAmount = 0;
+      let totalBankAmount = 0;
+
+      memberContributions.forEach(member => {
+        const collectionData = getMemberCollectionData(member.memberId);
+        totalPaidContribution += collectionData.compulsoryPaid;
+        totalPaidInterest += collectionData.interestPaid;
+        totalPaidLateFines += collectionData.lateFinePaid;
+        totalPaidLoanInsurance += collectionData.loanInsurancePaid;
+        totalPaidGroupSocial += collectionData.groupSocialPaid;
+        totalLoanRepayments += collectionData.loanRepayment;
+        totalCashAmount += collectionData.cashAmount;
+        totalBankAmount += collectionData.bankAmount;
+      });
+
+      const totalCollected = totalCashAmount + totalBankAmount;
+
+      // Create comprehensive dynamic headers
+      const headers = [
+        'SL',
+        'Member Name', 
+        'Compulsory Due',
+        'Compulsory Paid',
+        'Interest Due',
+        'Interest Paid'
+      ];
       
       // Add conditional columns
-      if (memberContributions.some(m => (m.expectedInterest || 0) > 0)) {
-        headers.push('Personal Loan Interest');
+      if (totalExpectedLateFines > 0 || totalPaidLateFines > 0) {
+        headers.push('Late Fine Due', 'Late Fine Paid');
       }
       
-      if (memberContributions.some(m => (m.lateFineAmount || 0) > 0)) {
-        headers.push('Late Fine');
+      if (group.loanInsuranceEnabled && (totalExpectedLoanInsurance > 0 || totalPaidLoanInsurance > 0)) {
+        headers.push('Loan Insurance Due', 'Loan Insurance Paid');
       }
       
-      if (group.loanInsuranceEnabled && memberContributions.some(m => (m.loanInsuranceAmount || 0) > 0)) {
-        headers.push('Loan Insurance');
+      if (group.groupSocialEnabled && (totalExpectedGroupSocial > 0 || totalPaidGroupSocial > 0)) {
+        headers.push('Group Social Due', 'Group Social Paid');
       }
       
-      if (group.groupSocialEnabled && memberContributions.some(m => (m.groupSocialAmount || 0) > 0)) {
-        headers.push('Group Social');
-      }
-      
-      headers.push('Total Expected', 'Status');
+      headers.push(
+        'Total Due',
+        'Total Paid', 
+        'Remaining',
+        'Loan Balance',
+        'Loan Paid',
+        'New Loan Balance',
+        'Cash Collected',
+        'Bank Collected',
+        'Status'
+      );
 
-      // Create member data rows dynamically
+      // Create member data rows
       const memberData = memberContributions.map((member, index) => {
+        const collectionData = getMemberCollectionData(member.memberId);
+        const totalMemberPaid = collectionData.compulsoryPaid + collectionData.interestPaid + 
+                               collectionData.lateFinePaid + collectionData.loanInsurancePaid + 
+                               collectionData.groupSocialPaid;
+        const remainingBalance = (member.totalExpected || 0) - totalMemberPaid;
+        const newLoanBalance = (member.currentLoanBalance || 0) - collectionData.loanRepayment;
+        
+        let paymentStatus = 'Pending';
+        if (totalMemberPaid >= (member.totalExpected || 0)) {
+          paymentStatus = 'Paid';
+        } else if (totalMemberPaid > 0) {
+          paymentStatus = 'Partial';
+        }
+        
         const row = [
           (index + 1).toString(),
           `"${member.memberName || ''}"`,
-          (member.expectedContribution || 0).toString()
+          formatCurrencyCSV(member.expectedContribution),
+          formatCurrencyCSV(collectionData.compulsoryPaid),
+          formatCurrencyCSV(member.expectedInterest),
+          formatCurrencyCSV(collectionData.interestPaid)
         ];
         
-        // Add conditional data
-        if (memberContributions.some(m => (m.expectedInterest || 0) > 0)) {
-          row.push((member.expectedInterest || 0).toString());
+        // Add conditional data columns
+        if (totalExpectedLateFines > 0 || totalPaidLateFines > 0) {
+          row.push(formatCurrencyCSV(member.lateFineAmount || 0));
+          row.push(formatCurrencyCSV(collectionData.lateFinePaid));
         }
         
-        if (memberContributions.some(m => (m.lateFineAmount || 0) > 0)) {
-          row.push((member.lateFineAmount || 0).toString());
+        if (group.loanInsuranceEnabled && (totalExpectedLoanInsurance > 0 || totalPaidLoanInsurance > 0)) {
+          row.push(formatCurrencyCSV(member.loanInsuranceAmount || 0));
+          row.push(formatCurrencyCSV(collectionData.loanInsurancePaid));
         }
         
-        if (group.loanInsuranceEnabled && memberContributions.some(m => (m.loanInsuranceAmount || 0) > 0)) {
-          row.push((member.loanInsuranceAmount || 0).toString());
+        if (group.groupSocialEnabled && (totalExpectedGroupSocial > 0 || totalPaidGroupSocial > 0)) {
+          row.push(formatCurrencyCSV(member.groupSocialAmount || 0));
+          row.push(formatCurrencyCSV(collectionData.groupSocialPaid));
         }
         
-        if (group.groupSocialEnabled && memberContributions.some(m => (m.groupSocialAmount || 0) > 0)) {
-          row.push((member.groupSocialAmount || 0).toString());
-        }
-        
-        row.push((member.totalExpected || 0).toString());
-        row.push(member.status === 'PAID' ? 'Paid' : member.status === 'PARTIAL' ? 'Partial' : 'Pending');
+        row.push(
+          formatCurrencyCSV(member.totalExpected),
+          formatCurrencyCSV(totalMemberPaid),
+          formatCurrencyCSV(remainingBalance),
+          formatCurrencyCSV(member.currentLoanBalance),
+          formatCurrencyCSV(collectionData.loanRepayment),
+          formatCurrencyCSV(newLoanBalance),
+          formatCurrencyCSV(collectionData.cashAmount),
+          formatCurrencyCSV(collectionData.bankAmount),
+          paymentStatus
+        );
         
         return row;
       });
 
       // Create totals row
-      const totalsRow = ['', '"TOTAL"', totalCompulsoryContribution.toString()];
+      const completedMembers = memberContributions.filter(m => {
+        const collectionData = getMemberCollectionData(m.memberId);
+        const totalPaid = collectionData.compulsoryPaid + collectionData.interestPaid + 
+                         collectionData.lateFinePaid + collectionData.loanInsurancePaid + 
+                         collectionData.groupSocialPaid;
+        return totalPaid >= (m.totalExpected || 0);
+      }).length;
+      
+      const totalsRow = ['', '"TOTALS"'];
+      totalsRow.push(
+        formatCurrencyCSV(totalExpectedContribution),
+        formatCurrencyCSV(totalPaidContribution),
+        formatCurrencyCSV(totalExpectedInterest), 
+        formatCurrencyCSV(totalPaidInterest)
+      );
       
       // Add conditional totals
-      if (memberContributions.some(m => (m.expectedInterest || 0) > 0)) {
-        totalsRow.push(totalInterestPaid.toString());
+      if (totalExpectedLateFines > 0 || totalPaidLateFines > 0) {
+        totalsRow.push(formatCurrencyCSV(totalExpectedLateFines));
+        totalsRow.push(formatCurrencyCSV(totalPaidLateFines));
       }
       
-      if (memberContributions.some(m => (m.lateFineAmount || 0) > 0)) {
-        totalsRow.push(totalLateFines.toString());
+      if (group.loanInsuranceEnabled && (totalExpectedLoanInsurance > 0 || totalPaidLoanInsurance > 0)) {
+        totalsRow.push(formatCurrencyCSV(totalExpectedLoanInsurance));
+        totalsRow.push(formatCurrencyCSV(totalPaidLoanInsurance));
       }
       
-      if (group.loanInsuranceEnabled && memberContributions.some(m => (m.loanInsuranceAmount || 0) > 0)) {
-        totalsRow.push(totalLoanInsurance.toString());
+      if (group.groupSocialEnabled && (totalExpectedGroupSocial > 0 || totalPaidGroupSocial > 0)) {
+        totalsRow.push(formatCurrencyCSV(totalExpectedGroupSocial));
+        totalsRow.push(formatCurrencyCSV(totalPaidGroupSocial));
       }
       
-      if (group.groupSocialEnabled && memberContributions.some(m => (m.groupSocialAmount || 0) > 0)) {
-        totalsRow.push(totalGroupSocial.toString());
-      }
-      
-      totalsRow.push(totalExpected.toString());
-      totalsRow.push(`"${memberContributions.filter(c => c.status === 'PAID').length}/${memberContributions.length}"`);
+      totalsRow.push(
+        formatCurrencyCSV(totalExpected),
+        formatCurrencyCSV(totalPaidContribution + totalPaidInterest + totalPaidLateFines + totalPaidLoanInsurance + totalPaidGroupSocial),
+        formatCurrencyCSV(totalExpected - (totalPaidContribution + totalPaidInterest + totalPaidLateFines + totalPaidLoanInsurance + totalPaidGroupSocial)),
+        formatCurrencyCSV(totalPersonalLoanOutstanding),
+        formatCurrencyCSV(totalLoanRepayments),
+        formatCurrencyCSV(totalPersonalLoanOutstanding - totalLoanRepayments),
+        formatCurrencyCSV(totalCashAmount),
+        formatCurrencyCSV(totalBankAmount),
+        `"${completedMembers}/${memberContributions.length}"`
+      );
 
-      // Previous month data
+      // Calculate Group Standing and financial metrics
       const previousCashInHand = group.cashInHand || 0;
       const previousCashInBank = group.balanceInBank || 0;
       const previousMonthBalance = previousCashInHand + previousCashInBank;
-
-      // Calculate Group Standing using the specified formula
       const newCashInGroup = previousMonthBalance + totalCollected;
-      const groupSocialFund = totalGroupSocial;
-      const loanInsuranceFund = totalLoanInsurance;
-      const totalGroupStanding = newCashInGroup + totalPersonalLoanOutstanding - groupSocialFund - loanInsuranceFund;
+      const totalGroupStanding = newCashInGroup + (totalPersonalLoanOutstanding - totalLoanRepayments) - totalPaidGroupSocial - totalPaidLoanInsurance;
       const sharePerMember = group.memberCount > 0 ? totalGroupStanding / group.memberCount : 0;
 
       const periodName = showOldContributions && selectedPeriodId 
-        ? formatPeriodName(closedPeriods.find(p => p.id === selectedPeriodId))
+        ? formatPeriodName(closedPeriods.find((p: any) => p.id === selectedPeriodId))
         : formatPeriodName(currentPeriod);
 
-      // Create comprehensive CSV content matching the PDF format
+      // Create comprehensive CSV content
       const csvContent = [
         // Header Section
         [`"${group.name.toUpperCase()}"`],
         [`"GROUP STATEMENT - ${periodName.toUpperCase()}"`],
         [],
+        
         // Group Information
-        [`"Establishment Year:","${group.establishmentYear || 'N/A'}","","Monthly Contribution:","₹${group.monthlyContribution?.toLocaleString() || '0'}"`],
-        [`"Total Members:","${group.memberCount || memberContributions.length}","","Interest Rate:","${Number(group.interestRate) || 0}% per month"`],
-        [`"Collection Frequency:","${(group.collectionFrequency || 'MONTHLY').toLowerCase().replace('_', ' ')}","","Report Generated:","${new Date().toLocaleDateString('en-IN')}"`],
+        [`"GROUP INFORMATION"`],
+        [`"Establishment Year","${group.establishmentYear || 'N/A'}","","Monthly Contribution","₹${formatCurrencyCSV(group.monthlyContribution)}"`],
+        [`"Total Members","${group.memberCount || memberContributions.length}","","Interest Rate","${Number(group.interestRate) || 0}% per month"`],
+        [`"Collection Frequency","${(group.collectionFrequency || 'MONTHLY').toLowerCase().replace('_', ' ')}","","Report Generated","${new Date().toLocaleDateString('en-IN')}"`],
         [],
+        
         // Member Contributions Table
+        [`"MEMBER CONTRIBUTION DETAILS"`],
+        [],
         headers,
         ...memberData,
         totalsRow,
         [],
-        // Group Cash Summary
-        [`"GROUP CASH SUMMARY"`],
+        
+        // Financial Summary
+        [`"FINANCIAL SUMMARY"`],
         [],
-        [`"PREVIOUS MONTH"`],
-        [`"Cash in Hand","${previousCashInHand}"`],
-        [`"Cash in Bank","${previousCashInBank}"`],
-        [`"Total Previous Balance","${previousMonthBalance}"`],
+        [`"COLLECTION STATISTICS"`],
+        [`"Total Expected Amount","₹${formatCurrencyCSV(totalExpected)}"`],
+        [`"Total Collected Amount","₹${formatCurrencyCSV(totalPaidContribution + totalPaidInterest + totalPaidLateFines + totalPaidLoanInsurance + totalPaidGroupSocial)}"`],
+        [`"Outstanding Balance","₹${formatCurrencyCSV(totalExpected - (totalPaidContribution + totalPaidInterest + totalPaidLateFines + totalPaidLoanInsurance + totalPaidGroupSocial))}"`],
+        [`"Collection Rate","${totalExpected > 0 ? ((totalCollected / totalExpected) * 100).toFixed(2) : 0}%"`],
+        [`"Members Completed","${completedMembers} out of ${memberContributions.length}"`],
+        [],
+        
+        // Breakdown by Category
+        [`"CONTRIBUTION BREAKDOWN"`],
+        [`"Compulsory Contribution Due","₹${formatCurrencyCSV(totalExpectedContribution)}","Collected","₹${formatCurrencyCSV(totalPaidContribution)}","Rate","${totalExpectedContribution > 0 ? ((totalPaidContribution / totalExpectedContribution) * 100).toFixed(2) : 0}%"`],
+        [`"Personal Loan Interest Due","₹${formatCurrencyCSV(totalExpectedInterest)}","Collected","₹${formatCurrencyCSV(totalPaidInterest)}","Rate","${totalExpectedInterest > 0 ? ((totalPaidInterest / totalExpectedInterest) * 100).toFixed(2) : 0}%"`]
+      ];
+      
+      // Add conditional sections
+      if (totalExpectedLateFines > 0 || totalPaidLateFines > 0) {
+        csvContent.push([`"Late Fines Due","₹${formatCurrencyCSV(totalExpectedLateFines)}","Collected","₹${formatCurrencyCSV(totalPaidLateFines)}","Rate","${totalExpectedLateFines > 0 ? ((totalPaidLateFines / totalExpectedLateFines) * 100).toFixed(2) : 0}%"`]);
+      }
+      
+      if (group.loanInsuranceEnabled && (totalExpectedLoanInsurance > 0 || totalPaidLoanInsurance > 0)) {
+        csvContent.push([`"Loan Insurance Due","₹${formatCurrencyCSV(totalExpectedLoanInsurance)}","Collected","₹${formatCurrencyCSV(totalPaidLoanInsurance)}","Rate","${totalExpectedLoanInsurance > 0 ? ((totalPaidLoanInsurance / totalExpectedLoanInsurance) * 100).toFixed(2) : 0}%"`]);
+      }
+      
+      if (group.groupSocialEnabled && (totalExpectedGroupSocial > 0 || totalPaidGroupSocial > 0)) {
+        csvContent.push([`"Group Social Due","₹${formatCurrencyCSV(totalExpectedGroupSocial)}","Collected","₹${formatCurrencyCSV(totalPaidGroupSocial)}","Rate","${totalExpectedGroupSocial > 0 ? ((totalPaidGroupSocial / totalExpectedGroupSocial) * 100).toFixed(2) : 0}%"`]);
+      }
+      
+      csvContent.push(
+        [],
+        // Group Cash Flow
+        [`"GROUP CASH FLOW"`],
+        [],
+        [`"PREVIOUS MONTH BALANCE"`],
+        [`"Cash in Hand","₹${formatCurrencyCSV(previousCashInHand)}"`],
+        [`"Cash in Bank","₹${formatCurrencyCSV(previousCashInBank)}"`],
+        [`"Total Previous Balance","₹${formatCurrencyCSV(previousMonthBalance)}"`],
         [],
         [`"THIS MONTH COLLECTION"`],
-        [`"Monthly Contribution","${totalCompulsoryContribution}"`],
-        [`"Interest on Personal Loan","${totalInterestPaid}"`],
-        ...(totalLateFines > 0 ? [[`"Late Fine","${totalLateFines}"`]] : []),
-        ...(group.loanInsuranceEnabled && totalLoanInsurance > 0 ? [[`"Loan Insurance","${totalLoanInsurance}"`]] : []),
-        ...(group.groupSocialEnabled && totalGroupSocial > 0 ? [[`"Group Social","${totalGroupSocial}"`]] : []),
-        [`"Total Collection This Month","${totalCollected}"`],
+        [`"Cash Collection","₹${formatCurrencyCSV(totalCashAmount)}"`],
+        [`"Bank Collection","₹${formatCurrencyCSV(totalBankAmount)}"`],
+        [`"Total Collection","₹${formatCurrencyCSV(totalCollected)}"`],
         [],
-        [`"CASH ALLOCATION"`],
-        [`"Cash in Hand","${totalCashInHand}"`],
-        [`"Cash in Bank","${totalCashInBank}"`],
+        [`"NEW MONTH TOTALS"`],
+        [`"New Cash in Hand","₹${formatCurrencyCSV(previousCashInHand + totalCashAmount)}"`],
+        [`"New Cash in Bank","₹${formatCurrencyCSV(previousCashInBank + totalBankAmount)}"`],
+        [`"Total Cash in Group","₹${formatCurrencyCSV(newCashInGroup)}"`],
         [],
-        [`"NEW TOTALS"`],
-        [`"New Cash in Hand","${previousCashInHand + totalCashInHand}"`],
-        [`"New Cash in Bank","${previousCashInBank + totalCashInBank}"`],
-        [`"Personal Loan Outstanding","${totalPersonalLoanOutstanding}"`],
-        ...(group.groupSocialEnabled && totalGroupSocial > 0 ? [[`"Group Social Fund","${totalGroupSocial}"`]] : []),
-        ...(group.loanInsuranceEnabled && totalLoanInsurance > 0 ? [[`"Loan Insurance Fund","${totalLoanInsurance}"`]] : []),
+        
+        // Group Standing Calculation
+        [`"GROUP STANDING CALCULATION"`],
+        [`"New Cash in Group","₹${formatCurrencyCSV(newCashInGroup)}"`],
+        [`"+ Personal Loan Outstanding","₹${formatCurrencyCSV(totalPersonalLoanOutstanding - totalLoanRepayments)}"`]
+      );
+      
+      // Add conditional fund deductions
+      if (totalPaidGroupSocial > 0) {
+        csvContent.push([`"- Group Social Fund","₹${formatCurrencyCSV(totalPaidGroupSocial)}"`]);
+      }
+      
+      if (totalPaidLoanInsurance > 0) {
+        csvContent.push([`"- Loan Insurance Fund","₹${formatCurrencyCSV(totalPaidLoanInsurance)}"`]);
+      }
+      
+      csvContent.push(
+        [`"= TOTAL GROUP STANDING","₹${formatCurrencyCSV(totalGroupStanding)}"`],
         [],
-        [`"TOTAL GROUP STANDING"`],
-        [`"New Cash in Group","${newCashInGroup}"`],
-        [`"+ Personal Loan Outstanding","${totalPersonalLoanOutstanding}"`],
-        ...(groupSocialFund > 0 ? [[`"- Group Social Fund","${groupSocialFund}"`]] : []),
-        ...(loanInsuranceFund > 0 ? [[`"- Loan Insurance Fund","${loanInsuranceFund}"`]] : []),
-        [`"= TOTAL GROUP STANDING","${totalGroupStanding}"`],
+        [`"MEMBER SHARE CALCULATION"`],
+        [`"Total Group Standing","₹${formatCurrencyCSV(totalGroupStanding)}"`],
+        [`"Total Members","${group.memberCount}"`],
+        [`"Share per Member","₹${formatCurrencyCSV(sharePerMember)}"`],
         [],
-        [`"Share per Member","${sharePerMember.toFixed(2)}","(₹${totalGroupStanding.toLocaleString()} ÷ ${group.memberCount})"`],
-        [],
-        [`"Generated on ${new Date().toLocaleString('en-IN')}"`]
-      ].map(row => row.join(',')).join('\n');
+        
+        // Footer
+        [`"REPORT INFORMATION"`],
+        [`"Generated on","${new Date().toLocaleString('en-IN')}"`],
+        [`"Generated by","SHG Management System"`],
+        [`"Report Type","${showOldContributions ? 'Historical' : 'Current'} Period Statement"`],
+        [`"Period","${periodName}"`],
+        [`"Total Records","${memberContributions.length} members"`]
+      );
+
+      // Convert to CSV format
+      const csvString = csvContent.map(row => row.join(',')).join('\n');
 
       // Download CSV
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
       
-      const fileName = `${group.name.replace(/[^a-zA-Z0-9]/g, '_')}_Statement_${periodName.replace(/[^a-zA-Z0-9]/g, '_')}_${new Date().toISOString().split('T')[0]}.csv`;
+      const fileName = `${group.name.replace(/[^a-zA-Z0-9]/g, '_')}_Comprehensive_Statement_${periodName.replace(/[^a-zA-Z0-9]/g, '_')}_${new Date().toISOString().split('T')[0]}.csv`;
+      link.download = fileName;
+      link.click();
+      
+      setShowReportModal(false);
+    } catch (err) {
+      console.error('CSV generation error:', err);
+      alert(err instanceof Error ? err.message : 'An error occurred generating CSV');
+    }
+
+  };
+
+  // Function to generate Excel report
+        [`"GROUP STATEMENT - ${periodName.toUpperCase()}"`],
+        [],
+        
+        // === GROUP INFORMATION SECTION ===
+        [`"GROUP INFORMATION"`],
+        [`"Establishment Year","${group.establishmentYear || 'N/A'}","","Monthly Contribution","₹${formatCurrencyCSV(group.monthlyContribution)}"`],
+        [`"Total Members","${group.memberCount || memberContributions.length}","","Interest Rate","${Number(group.interestRate) || 0}% per month"`],
+        [`"Collection Frequency","${(group.collectionFrequency || 'MONTHLY').toLowerCase().replace('_', ' ')}","","Report Generated","${new Date().toLocaleDateString('en-IN')}"`],
+        [`"Group Leader","${group.leader?.name || 'N/A'}","","Contact","${group.leader?.phone || 'N/A'}"`],
+        [],
+        
+        // === MEMBER CONTRIBUTIONS TABLE ===
+        [`"MEMBER CONTRIBUTION DETAILS"`],
+        [],
+        headers,
+        ...memberData,
+        totalsRow,
+        [],
+        
+        // === FINANCIAL SUMMARY SECTION ===
+        [`"FINANCIAL SUMMARY"`],
+        [],
+        [`"COLLECTION STATISTICS"`],
+        [`"Total Expected Amount","₹${formatCurrencyCSV(totalExpected)}"`],
+        [`"Total Collected Amount","₹${formatCurrencyCSV(totalPaidContribution + totalPaidInterest + totalPaidLateFines + totalPaidLoanInsurance + totalPaidGroupSocial)}"`],
+        [`"Outstanding Balance","₹${formatCurrencyCSV(totalRemaining)}"`],
+        [`"Collection Rate","${totalExpected > 0 ? ((totalCollected / totalExpected) * 100).toFixed(2) : 0}%"`],
+        [`"Members Completed","${completedMembers} out of ${memberContributions.length}"`],
+        [`"Members with Outstanding","${memberContributions.length - completedMembers} members"`],
+        [`"Members with Late Fines","${memberContributions.filter(m => (m.daysLate || 0) > 0).length} members"`],
+        [],
+        
+        // === DETAILED BREAKDOWN BY CATEGORY ===
+        [`"CONTRIBUTION BREAKDOWN"`],
+        [`"Compulsory Contribution Due","₹${formatCurrencyCSV(totalExpectedContribution)}","Collected","₹${formatCurrencyCSV(totalPaidContribution)}","Rate","${totalExpectedContribution > 0 ? ((totalPaidContribution / totalExpectedContribution) * 100).toFixed(2) : 0}%"`],
+        [`"Personal Loan Interest Due","₹${formatCurrencyCSV(totalExpectedInterest)}","Collected","₹${formatCurrencyCSV(totalPaidInterest)}","Rate","${totalExpectedInterest > 0 ? ((totalPaidInterest / totalExpectedInterest) * 100).toFixed(2) : 0}%"`],
+      ];
+      
+      // Add conditional breakdown sections
+      if (totalExpectedLateFines > 0 || totalPaidLateFines > 0) {
+        csvContent.push([`"Late Fines Due","₹${formatCurrencyCSV(totalExpectedLateFines)}","Collected","₹${formatCurrencyCSV(totalPaidLateFines)}","Rate","${totalExpectedLateFines > 0 ? ((totalPaidLateFines / totalExpectedLateFines) * 100).toFixed(2) : 0}%"`]);
+      }
+      
+      if (group.loanInsuranceEnabled && (totalExpectedLoanInsurance > 0 || totalPaidLoanInsurance > 0)) {
+        csvContent.push([`"Loan Insurance Due","₹${formatCurrencyCSV(totalExpectedLoanInsurance)}","Collected","₹${formatCurrencyCSV(totalPaidLoanInsurance)}","Rate","${totalExpectedLoanInsurance > 0 ? ((totalPaidLoanInsurance / totalExpectedLoanInsurance) * 100).toFixed(2) : 0}%"`]);
+      }
+      
+      if (group.groupSocialEnabled && (totalExpectedGroupSocial > 0 || totalPaidGroupSocial > 0)) {
+        csvContent.push([`"Group Social Due","₹${formatCurrencyCSV(totalExpectedGroupSocial)}","Collected","₹${formatCurrencyCSV(totalPaidGroupSocial)}","Rate","${totalExpectedGroupSocial > 0 ? ((totalPaidGroupSocial / totalExpectedGroupSocial) * 100).toFixed(2) : 0}%"`]);
+      }
+      
+      csvContent.push(
+        [],
+        [`"LOAN REPAYMENT SUMMARY"`],
+        [`"Total Loans Outstanding","₹${formatCurrencyCSV(totalPersonalLoanOutstanding)}"`],
+        [`"Loan Repayments This Period","₹${formatCurrencyCSV(totalLoanRepayments)}"`],
+        [`"New Loan Balance","₹${formatCurrencyCSV(totalPersonalLoanOutstanding - totalLoanRepayments)}"`],
+        [`"Members with Active Loans","${memberContributions.filter(m => (m.currentLoanBalance || 0) > 0).length} members"`],
+        [],
+        
+        // === CASH FLOW SECTION ===
+        [`"GROUP CASH FLOW"`],
+        [],
+        [`"PREVIOUS MONTH BALANCE"`],
+        [`"Cash in Hand","₹${formatCurrencyCSV(previousCashInHand)}"`],
+        [`"Cash in Bank","₹${formatCurrencyCSV(previousCashInBank)}"`],
+        [`"Total Previous Balance","₹${formatCurrencyCSV(previousMonthBalance)}"`],
+        [],
+        [`"THIS MONTH COLLECTION"`],
+        [`"Cash Collection","₹${formatCurrencyCSV(totalCashAmount)}"`],
+        [`"Bank Collection","₹${formatCurrencyCSV(totalBankAmount)}"`],
+        [`"Total Collection","₹${formatCurrencyCSV(totalCollected)}"`],
+        [],
+        [`"NEW MONTH TOTALS"`],
+        [`"New Cash in Hand","₹${formatCurrencyCSV(previousCashInHand + totalCashAmount)}"`],
+        [`"New Cash in Bank","₹${formatCurrencyCSV(previousCashInBank + totalBankAmount)}"`],
+        [`"Total Cash in Group","₹${formatCurrencyCSV(newCashInGroup)}"`],
+        [],
+        
+        // === GROUP STANDING CALCULATION ===
+        [`"GROUP STANDING CALCULATION"`],
+        [`"New Cash in Group","₹${formatCurrencyCSV(newCashInGroup)}"`],
+        [`"+ Personal Loan Outstanding","₹${formatCurrencyCSV(totalPersonalLoanOutstanding - totalLoanRepayments)}"`]
+      );
+      
+      // Add conditional fund deductions
+      if (groupSocialFund > 0) {
+        csvContent.push([`"- Group Social Fund","₹${formatCurrencyCSV(groupSocialFund)}"`]);
+      }
+      
+      if (loanInsuranceFund > 0) {
+        csvContent.push([`"- Loan Insurance Fund","₹${formatCurrencyCSV(loanInsuranceFund)}"`]);
+      }
+      
+      csvContent.push(
+        [`"= TOTAL GROUP STANDING","₹${formatCurrencyCSV(totalGroupStanding)}"`],
+        [],
+        [`"MEMBER SHARE CALCULATION"`],
+        [`"Total Group Standing","₹${formatCurrencyCSV(totalGroupStanding)}"`],
+        [`"Total Members","${group.memberCount}"`],
+        [`"Share per Member","₹${formatCurrencyCSV(sharePerMember)}"`],
+        []
+      );
+      
+      // Add growth analysis if previous data exists  
+      const previousMonthStanding = getPreviousPeriodStanding();
+      const monthlyGrowth = totalGroupStanding - previousMonthStanding;
+      const growthPercentage = previousMonthStanding > 0 ? (monthlyGrowth / previousMonthStanding) * 100 : 0;
+      
+      if (previousMonthStanding > 0) {
+        csvContent.push(
+          [`"GROWTH ANALYSIS"`],
+          [`"Previous Month Standing","₹${formatCurrencyCSV(previousMonthStanding)}"`],
+          [`"Current Month Standing","₹${formatCurrencyCSV(totalGroupStanding)}"`],
+          [`"Monthly Growth Amount","₹${formatCurrencyCSV(monthlyGrowth)}"`],
+          [`"Growth Percentage","${growthPercentage.toFixed(2)}%"`],
+          []
+        );
+      }
+      
+      // === MEMBER PERFORMANCE ANALYSIS ===
+      const overdueMembers = memberContributions.filter(m => (m.daysLate || 0) > 0);
+      const partialPaymentMembers = memberContributions.filter(m => {
+        const collectionData = getMemberCollectionData(m.memberId);
+        const totalPaid = collectionData.compulsoryPaid + collectionData.interestPaid + 
+                         collectionData.lateFinePaid + collectionData.loanInsurancePaid + 
+                         collectionData.groupSocialPaid;
+        return totalPaid > 0 && totalPaid < (m.totalExpected || 0);
+      });
+      
+      csvContent.push(
+        [`"MEMBER PERFORMANCE ANALYSIS"`],
+        [`"Total Members","${memberContributions.length}"`],
+        [`"Completed Payments","${completedMembers} (${((completedMembers / memberContributions.length) * 100).toFixed(1)}%)"`],
+        [`"Partial Payments","${partialPaymentMembers.length} (${((partialPaymentMembers.length / memberContributions.length) * 100).toFixed(1)}%)"`],
+        [`"Pending Payments","${memberContributions.length - completedMembers - partialPaymentMembers.length} (${(((memberContributions.length - completedMembers - partialPaymentMembers.length) / memberContributions.length) * 100).toFixed(1)}%)"`],
+        [`"Overdue Members","${overdueMembers.length} (${((overdueMembers.length / memberContributions.length) * 100).toFixed(1)}%)"`],
+        []
+      );
+      
+      // Add overdue member details if any
+      if (overdueMembers.length > 0) {
+        csvContent.push(
+          [`"OVERDUE MEMBER DETAILS"`],
+          [`"Member Name","Days Late","Outstanding Amount"`]
+        );
+        
+        overdueMembers.forEach(member => {
+          const collectionData = getMemberCollectionData(member.memberId);
+          const totalPaid = collectionData.compulsoryPaid + collectionData.interestPaid + 
+                           collectionData.lateFinePaid + collectionData.loanInsurancePaid + 
+                           collectionData.groupSocialPaid;
+          const outstanding = (member.totalExpected || 0) - totalPaid;
+          
+          csvContent.push([
+            `"${member.memberName || ''}"`,
+            (member.daysLate || 0).toString(),
+            `"₹${formatCurrencyCSV(outstanding)}"`
+          ]);
+        });
+        
+        csvContent.push([]);
+      }
+      
+      // === FOOTER ===
+      csvContent.push(
+        [`"REPORT INFORMATION"`],
+        [`"Generated on","${new Date().toLocaleString('en-IN')}"`],
+        [`"Generated by","SHG Management System"`],
+        [`"Report Type","${showOldContributions ? 'Historical' : 'Current'} Period Statement"`],
+        [`"Period","${periodName}"`],
+        [`"Total Records","${memberContributions.length} members"`]
+      );
+
+      // Convert to CSV format
+      const csvString = csvContent.map(row => row.join(',')).join('\n');
+
+      // Download CSV with improved filename
+      const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      
+      const fileName = `${group.name.replace(/[^a-zA-Z0-9]/g, '_')}_Comprehensive_Statement_${periodName.replace(/[^a-zA-Z0-9]/g, '_')}_${new Date().toISOString().split('T')[0]}.csv`;
       link.download = fileName;
       link.click();
       
@@ -2181,9 +2521,8 @@ export default function ContributionTrackingPage() {
     // Helper function to safely format currency - robust approach
     const formatCurrency = (amount: number | undefined | null): string => {
       const numValue = Number(amount);
-      if (isNaN(numValue)) return 'Rs. 0.00';
-      // Use 'Rs.' instead of '₹' symbol for better PDF compatibility
-      return `Rs. ${numValue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      if (isNaN(numValue)) return '₹0.00';
+      return `₹${numValue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     };
     
     // Helper function to get previous period standing

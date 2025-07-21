@@ -14,10 +14,10 @@ export function roundToTwoDecimals(amount: number): number {
 /**
  * Format a number as currency with proper rounding
  * @param amount - The amount to format
- * @returns Formatted currency string
+ * @returns Formatted currency string with rupee symbol
  */
 export function formatCurrency(amount: number): string {
-  return roundToTwoDecimals(amount).toLocaleString('en-IN', {
+  return 'Rs. ' + roundToTwoDecimals(amount).toLocaleString('en-IN', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   });
