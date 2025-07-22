@@ -1345,6 +1345,15 @@ The PDF may contain scanned images or use an unsupported format.
         members: data.members.map((m: z.infer<typeof memberDataSchema>) => {
           // If this member had a temporary ID, use the real ID from our mapping
           const realMemberId = memberIdMapping[m.memberId] || m.memberId;
+          
+          // Debug family size mapping
+          console.log(`🔍 [DEBUG] Member ${m.name || 'Unknown'} (${realMemberId}):`, {
+            originalFamilySize: m.familyMembersCount,
+            finalFamilySize: m.familyMembersCount || 1,
+            hasGroupSocial: data.groupSocialEnabled,
+            groupSocialPerFamily: data.groupSocialAmountPerFamilyMember
+          });
+          
           return {
             memberId: realMemberId,
             currentShare: data.globalShareAmount || 0, // Apply global share amount to all members
@@ -1843,6 +1852,10 @@ The PDF may contain scanned images or use an unsupported format.
                                 type="number"
                                 id="dailyAmount"
                                 {...register("lateFineRule.dailyAmount", { valueAsNumber: true })}
+                                onWheel={(e) => {
+                                  // Prevent mouse wheel from changing number input values
+                                  e.currentTarget.blur();
+                                }}
                                 className="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                                 placeholder="e.g., 10"
                                 min="0"
@@ -1862,6 +1875,10 @@ The PDF may contain scanned images or use an unsupported format.
                                 type="number"
                                 id="dailyPercentage"
                                 {...register("lateFineRule.dailyPercentage", { valueAsNumber: true })}
+                                onWheel={(e) => {
+                                  // Prevent mouse wheel from changing number input values
+                                  e.currentTarget.blur();
+                                }}
                                 className="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                                 placeholder="e.g., 1.5"
                                 min="0"
@@ -3253,6 +3270,10 @@ The PDF may contain scanned images or use an unsupported format.
                       value={value || ''}
                       onChange={e => onChange(parseFloat(e.target.value) || 0)}
                       onBlur={onBlur}
+                      onWheel={(e) => {
+                        // Prevent mouse wheel from changing number input values
+                        e.currentTarget.blur();
+                      }}
                       min="0"
                       className="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                       placeholder="e.g., 10000"
@@ -3279,6 +3300,10 @@ The PDF may contain scanned images or use an unsupported format.
                       value={value || ''}
                       onChange={e => onChange(parseFloat(e.target.value) || 0)}
                       onBlur={onBlur}
+                      onWheel={(e) => {
+                        // Prevent mouse wheel from changing number input values
+                        e.currentTarget.blur();
+                      }}
                       min="0"
                       className="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                       placeholder="e.g., 25000"
@@ -3305,6 +3330,10 @@ The PDF may contain scanned images or use an unsupported format.
                       value={value || ''}
                       onChange={e => onChange(parseFloat(e.target.value) || 0)}
                       onBlur={onBlur}
+                      onWheel={(e) => {
+                        // Prevent mouse wheel from changing number input values
+                        e.currentTarget.blur();
+                      }}
                       min="0"
                       max="100"
                       step="0.1"
@@ -3340,6 +3369,10 @@ The PDF may contain scanned images or use an unsupported format.
                       value={value || ''}
                       onChange={e => onChange(parseFloat(e.target.value) || 0)}
                       onBlur={onBlur}
+                      onWheel={(e) => {
+                        // Prevent mouse wheel from changing number input values
+                        e.currentTarget.blur();
+                      }}
                       min="0"
                       className="mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
                       placeholder="e.g., 1000"
@@ -3405,6 +3438,10 @@ The PDF may contain scanned images or use an unsupported format.
                                   onChange(newValue);
                                 }}
                                 onBlur={onBlur}
+                                onWheel={(e) => {
+                                  // Prevent mouse wheel from changing number input values
+                                  e.currentTarget.blur();
+                                }}
                                 min="0"
                                 className="mt-1 block w-full max-w-xs px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-green-500 focus:border-green-500"
                                 placeholder="e.g., 50 (Leave 0 if not applicable)"
@@ -3520,6 +3557,10 @@ The PDF may contain scanned images or use an unsupported format.
                                     onChange(newValue);
                                   }}
                                   onBlur={onBlur}
+                                  onWheel={(e) => {
+                                    // Prevent mouse wheel from changing number input values
+                                    e.currentTarget.blur();
+                                  }}
                                   min="0"
                                   max="100"
                                   step="0.1"
@@ -3643,12 +3684,12 @@ The PDF may contain scanned images or use an unsupported format.
                         if (e.target.checked) {
                           // Set current period to next month for contribution tracking
                           const currentDate = new Date();
-                          const nextMonth = currentDate.getMonth() + 2; // +2 because getMonth() is 0-based, and we want next month
-                          const nextYear = nextMonth > 12 ? currentDate.getFullYear() + 1 : currentDate.getFullYear();
-                          const adjustedMonth = nextMonth > 12 ? 1 : nextMonth;
+                          const nextMonth = currentDate.getMonth() + 1; // +1 because we want next month (getMonth() is 0-based)
+                          const nextYear = nextMonth > 11 ? currentDate.getFullYear() + 1 : currentDate.getFullYear();
+                          const adjustedMonth = nextMonth > 11 ? 0 : nextMonth;
                           
-                          setValue('currentPeriodMonth', adjustedMonth);
-                          setValue('currentPeriodYear', adjustedMonth === 1 ? nextYear : currentDate.getFullYear());
+                          setValue('currentPeriodMonth', adjustedMonth + 1); // Convert back to 1-based for storage
+                          setValue('currentPeriodYear', adjustedMonth === 0 ? nextYear : currentDate.getFullYear());
                         } else {
                           // Set current period to current month
                           const currentDate = new Date();
@@ -3669,12 +3710,12 @@ The PDF may contain scanned images or use an unsupported format.
                         <p className="text-sm text-blue-800 dark:text-blue-200">
                           <strong>Current Period for Contribution Tracking:</strong> {(() => {
                             const currentDate = new Date();
-                            const nextMonth = currentDate.getMonth() + 2;
-                            const nextYear = nextMonth > 12 ? currentDate.getFullYear() + 1 : currentDate.getFullYear();
-                            const adjustedMonth = nextMonth > 12 ? 1 : nextMonth;
+                            const nextMonth = currentDate.getMonth() + 1; // Get next month (0-based + 1)
+                            const nextYear = nextMonth > 11 ? currentDate.getFullYear() + 1 : currentDate.getFullYear();
+                            const adjustedMonth = nextMonth > 11 ? 0 : nextMonth; // Handle December->January
                             const monthNames = ['January', 'February', 'March', 'April', 'May', 'June',
                               'July', 'August', 'September', 'October', 'November', 'December'];
-                            return `${monthNames[adjustedMonth - 1]} ${adjustedMonth === 1 ? nextYear : currentDate.getFullYear()}`;
+                            return `${monthNames[adjustedMonth]} ${adjustedMonth === 0 ? nextYear : currentDate.getFullYear()}`;
                           })()}
                         </p>
                         <p className="text-xs text-blue-600 dark:text-blue-300 mt-1">
@@ -3726,6 +3767,10 @@ The PDF may contain scanned images or use an unsupported format.
                         value={value || ''}
                         onChange={e => onChange(parseFloat(e.target.value) || 0)}
                         onBlur={onBlur}
+                        onWheel={(e) => {
+                          // Prevent mouse wheel from changing number input values
+                          e.currentTarget.blur();
+                        }}
                         min="0"
                         className="flex-1 mt-1 block w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-purple-500 focus:border-purple-500"
                         placeholder="e.g., 500"
@@ -3795,6 +3840,10 @@ The PDF may contain scanned images or use an unsupported format.
                                 onChange(newValue);
                               }}
                               onBlur={onBlur}
+                              onWheel={(e) => {
+                                // Prevent mouse wheel from changing number input values
+                                e.currentTarget.blur();
+                              }}
                               min="0"
                               className="input-field-sm"
                               placeholder="e.g., 5000"
@@ -3820,10 +3869,20 @@ The PDF may contain scanned images or use an unsupported format.
                               value={value || 1}
                               onChange={e => {
                                 const newValue = parseInt(e.target.value) || 1;
-                                console.log(`🔄 Member ${index} family size changing from ${value} to ${newValue}`);
+                                console.log(`🔄 [FAMILY SIZE] Member ${index} (${field.name}) family size changing from ${value} to ${newValue}`);
+                                console.log(`🔄 [FAMILY SIZE] Current form data for member:`, {
+                                  memberName: field.name,
+                                  currentValue: value,
+                                  newValue: newValue,
+                                  inputValue: e.target.value
+                                });
                                 onChange(newValue);
                               }}
                               onBlur={onBlur}
+                              onWheel={(e) => {
+                                // Prevent mouse wheel from changing number input values
+                                e.currentTarget.blur();
+                              }}
                               min="1"
                               max="20"
                               className="input-field-sm"
@@ -3855,7 +3914,8 @@ The PDF may contain scanned images or use an unsupported format.
           <div className="bg-green-50 dark:bg-green-900/20 p-4 rounded-lg border border-green-200 dark:border-green-800">
             <div className="flex justify-between items-center mb-3">
               <h3 className="text-lg font-medium text-green-900 dark:text-green-100">Auto-Calculated Summary</h3>
-              <div className="flex items-center">
+              {/* Hidden subtract LI & GS button as requested */}
+              {/* <div className="flex items-center">
                 <input
                   type="checkbox"
                   id="subtractFunds"
@@ -3866,7 +3926,7 @@ The PDF may contain scanned images or use an unsupported format.
                 <label htmlFor="subtractFunds" className="text-sm font-medium text-green-900 dark:text-green-100">
                   Subtract LI & GS from Standing
                 </label>
-              </div>
+              </div> */}
             </div>
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
@@ -4154,6 +4214,22 @@ The PDF may contain scanned images or use an unsupported format.
                   disabled={isLoading}
                 >
                   {isLoading ? (isEditing ? 'Updating Group...' : 'Creating Group...') : (isEditing ? 'Update Group' : 'Create Group')}
+                </button>
+                {/* Debug Button for Family Size Testing */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    console.log("=== FAMILY SIZE DEBUG - FORM STATE ===");
+                    const formValues = getValues();
+                    console.log("Form values:", formValues);
+                    console.log("Members with family size:", formValues.members?.map(m => ({
+                      name: m.name,
+                      familyMembersCount: m.familyMembersCount
+                    })));
+                  }}
+                  className="ml-2 px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                >
+                  Debug Family Size
                 </button>
               </>
             )}

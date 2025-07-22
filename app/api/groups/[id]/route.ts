@@ -210,6 +210,15 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       balanceInBank: typedGroup.balanceInBank || 0,
       monthlyContribution: typedGroup.monthlyContribution || 0,
       interestRate: typedGroup.interestRate || 0,
+      
+      // Include loan insurance and group social settings
+      loanInsuranceEnabled: typedGroup.loanInsuranceEnabled || false,
+      loanInsurancePercent: typedGroup.loanInsurancePercent || null,
+      loanInsuranceBalance: typedGroup.loanInsuranceBalance || null,
+      groupSocialEnabled: typedGroup.groupSocialEnabled || false,
+      groupSocialAmountPerFamilyMember: typedGroup.groupSocialAmountPerFamilyMember || null,
+      groupSocialBalance: typedGroup.groupSocialBalance || null,
+      
       // Keep membership count for add-member functionality
       membershipCount: group.memberships.length,
       currentShareAmountPerMember: currentShareAmountPerMember,

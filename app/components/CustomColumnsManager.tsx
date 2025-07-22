@@ -90,6 +90,12 @@ export function CustomColumnsManager({
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [showInactiveColumns] = useState(false);
+  const [isMounted, setIsMounted] = useState(false);
+
+  // Handle client-side mounting
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   // Memoized filtered and sorted columns
   const filteredColumns = useMemo(() => {
@@ -305,6 +311,18 @@ export function CustomColumnsManager({
 
   const selectedColumn = selectedColumnId ? schema.columns.find(col => col.id === selectedColumnId) : null;
 
+  // Show loading state until component is mounted (fixes SSR issues)
+  if (!isMounted) {
+    return (
+      <div className={`custom-columns-manager ${className}`}>
+        <div className="flex items-center justify-center py-12">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+          <span className="ml-2 text-gray-600 dark:text-gray-400">Loading...</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`custom-columns-manager ${className}`}>
       {/* Header */}
@@ -434,11 +452,13 @@ export function CustomColumnsManager({
             <p>No columns found. Add some columns to get started!</p>
           </div>
         ) : (
-          <DragDropContext onDragEnd={handleDragEnd}>
-            <Droppable droppableId="columns">
-              {(provided) => (
-                <div
-                  {...provided.droppableProps}
+          <>
+            {typeof DragDropContext !== 'undefined' ? (
+              <DragDropContext onDragEnd={handleDragEnd}>
+                <Droppable droppableId="columns">
+                  {(provided) => (
+                    <div
+                      {...provided.droppableProps}
                   ref={provided.innerRef}
                   className="space-y-2"
                 >
@@ -513,6 +533,66 @@ export function CustomColumnsManager({
               )}
             </Droppable>
           </DragDropContext>
+            ) : (
+              // Fallback when drag-drop components aren't available
+              <div className="space-y-2">
+                {filteredColumns.map((column) => (
+                  <div
+                    key={column.id}
+                    className="bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg p-4 shadow-sm hover:shadow-md transition-shadow duration-200"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1 mr-4">
+                        <div className="flex items-center gap-2 mb-1">
+                          <div className="cursor-not-allowed p-1 rounded text-gray-300">⋮⋮</div>
+                          <h4 className="font-medium text-gray-900 dark:text-gray-100">{column.name}</h4>
+                          <span className="px-2 py-1 text-xs bg-gray-100 text-gray-600 dark:bg-gray-600 dark:text-gray-300 rounded">
+                            {column.dataType}
+                          </span>
+                          {!column.isActive && (
+                            <span className="px-2 py-1 text-xs bg-red-100 text-red-600 dark:bg-red-900 dark:text-red-400 rounded">Inactive</span>
+                          )}
+                        </div>
+                        {column.description && (
+                          <p className="text-sm text-gray-600 dark:text-gray-400">{column.description}</p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleColumnToggle(column.id)}
+                          className="p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900 rounded-md"
+                          title={column.isActive ? 'Hide Column' : 'Show Column'}
+                        >
+                          {column.isActive ? <EyeIcon className="w-4 h-4" /> : <EyeSlashIcon className="w-4 h-4" />}
+                        </button>
+                        <button
+                          onClick={() => handleColumnEdit(column.id)}
+                          className="p-2 text-gray-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900 rounded-md"
+                          title="Edit Column"
+                        >
+                          <PencilIcon className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleColumnDuplicate(column.id)}
+                          className="p-2 text-gray-400 hover:text-green-500 hover:bg-green-50 dark:hover:bg-green-900 rounded-md"
+                          title="Duplicate Column"
+                        >
+                          <DocumentDuplicateIcon className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleColumnDelete(column.id)}
+                          className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900 rounded-md"
+                          title="Delete Column"
+                        >
+                          <TrashIcon className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
         )}
       </div>
 

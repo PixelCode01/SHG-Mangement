@@ -81,7 +81,8 @@ export default function CreateGroupPage() {
           memberId: String(member.memberId || ''),
           currentShareAmount: Number(member.currentShareAmount || member.initialShareAmount || member.currentShare) || 0,
           currentLoanAmount: Number(member.currentLoanAmount || member.initialLoanAmount) || 0, 
-          initialInterest: Number(member.initialInterest) || 0
+          initialInterest: Number(member.initialInterest) || 0,
+          familyMembersCount: Number(member.familyMembersCount) || 1,
         }));
       }
 

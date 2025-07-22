@@ -8,9 +8,23 @@ import { useForm, Controller, useFieldArray, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 
-// Import Custom Columns components and types][]
-import { CustomColumnsManager } from '@/app/components/CustomColumnsManager';
+// Import Custom Columns components and types
+import dynamic from 'next/dynamic';
 import { GroupCustomSchema } from '@/app/types/custom-columns';
+
+// Dynamically import CustomColumnsManager to avoid SSR issues
+const CustomColumnsManager = dynamic(
+  () => import('@/app/components/CustomColumnsManager').then(mod => ({ default: mod.CustomColumnsManager })),
+  { 
+    ssr: false,
+    loading: () => (
+      <div className="flex items-center justify-center py-12">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+        <span className="ml-2 text-gray-600 dark:text-gray-400">Loading Custom Columns...</span>
+      </div>
+    )
+  }
+);
 
 interface EditGroupPageProps {
   params: Promise<{ id: string }>;
@@ -72,8 +86,8 @@ interface GroupEditData {
   currentPeriodYear: number | null;
   
   // Late fine settings - Updated to use the complete late fine rule structure
-  lateFineRule?: {
-    isEnabled: boolean;
+  lateFineRules?: Array<{
+    isEnabled?: boolean;
     ruleType?: string;
     dailyAmount?: number;
     dailyPercentage?: number;
@@ -83,7 +97,7 @@ interface GroupEditData {
       amount: number;
       isPercentage: boolean;
     }>;
-  };
+  }>;
 }
 
 // Late fine tier schema
@@ -442,23 +456,44 @@ export default function EditGroupPage({ params }: EditGroupPageProps) {
           currentPeriodMonth: groupData.currentPeriodMonth || new Date().getMonth() + 1,
           currentPeriodYear: groupData.currentPeriodYear || new Date().getFullYear(),
           
-          // Late fine settings - Updated to use the complete late fine rule structure
-          lateFineRule: groupData.lateFineRule ? {
-            isEnabled: groupData.lateFineRule.isEnabled || false,
-            ruleType: groupData.lateFineRule.ruleType as 'DAILY_FIXED' | 'DAILY_PERCENTAGE' | 'TIER_BASED' | undefined,
-            dailyAmount: groupData.lateFineRule.dailyAmount,
-            dailyPercentage: groupData.lateFineRule.dailyPercentage,
-            tierRules: groupData.lateFineRule.tierRules,
-            // Populate tier fields for form editing
-            tier1StartDay: groupData.lateFineRule.tierRules?.[0]?.startDay || 1,
-            tier1EndDay: groupData.lateFineRule.tierRules?.[0]?.endDay || 5,
-            tier1Amount: groupData.lateFineRule.tierRules?.[0]?.amount,
-            tier2StartDay: groupData.lateFineRule.tierRules?.[1]?.startDay || 6,
-            tier2EndDay: groupData.lateFineRule.tierRules?.[1]?.endDay || 15,
-            tier2Amount: groupData.lateFineRule.tierRules?.[1]?.amount,
-            tier3StartDay: groupData.lateFineRule.tierRules?.[2]?.startDay || 16,
-            tier3Amount: groupData.lateFineRule.tierRules?.[2]?.amount,
-          } : {
+          // Late fine settings - Map from lateFineRules array to lateFineRule object
+          lateFineRule: groupData.lateFineRules && groupData.lateFineRules.length > 0 ? (() => {
+            const lateFineRule = groupData.lateFineRules[0];
+            if (!lateFineRule) {
+              return {
+                isEnabled: false,
+                ruleType: undefined,
+                dailyAmount: undefined,
+                dailyPercentage: undefined,
+                tierRules: undefined,
+                tier1StartDay: 1,
+                tier1EndDay: 5,
+                tier1Amount: undefined,
+                tier2StartDay: 6,
+                tier2EndDay: 15,
+                tier2Amount: undefined,
+                tier3StartDay: 16,
+                tier3Amount: undefined,
+              };
+            }
+            
+            return {
+              isEnabled: true, // If there are late fine rules, it's enabled
+              ruleType: lateFineRule.ruleType as 'DAILY_FIXED' | 'DAILY_PERCENTAGE' | 'TIER_BASED' | undefined,
+              dailyAmount: lateFineRule.dailyAmount,
+              dailyPercentage: lateFineRule.dailyPercentage,
+              tierRules: lateFineRule.tierRules,
+              // Populate tier fields for form editing
+              tier1StartDay: lateFineRule.tierRules?.[0]?.startDay || 1,
+              tier1EndDay: lateFineRule.tierRules?.[0]?.endDay || 5,
+              tier1Amount: lateFineRule.tierRules?.[0]?.amount,
+              tier2StartDay: lateFineRule.tierRules?.[1]?.startDay || 6,
+              tier2EndDay: lateFineRule.tierRules?.[1]?.endDay || 15,
+              tier2Amount: lateFineRule.tierRules?.[1]?.amount,
+              tier3StartDay: lateFineRule.tierRules?.[2]?.startDay || 16,
+              tier3Amount: lateFineRule.tierRules?.[2]?.amount,
+            };
+          })() : {
             isEnabled: false,
             ruleType: undefined,
             dailyAmount: undefined,
@@ -474,17 +509,16 @@ export default function EditGroupPage({ params }: EditGroupPageProps) {
             tier3Amount: undefined,
           },
           
-          members: groupData.members.map(m => ({ // Map members data for the form
-            id: m.id,
-            name: m.name,
-            currentLoanAmount: m.currentLoanAmount,
-            familyMembersCount: m.familyMembersCount,
+          // Map members data to the form structure
+          members: groupData.members.map(member => ({
+            id: member.id,
+            name: member.name,
+            currentLoanAmount: member.currentLoanAmount,
+            familyMembersCount: member.familyMembersCount,
           })),
         });
-
-      } catch (err: any) {
-        console.error('Error fetching data:', err);
-        setError(err.message || 'Failed to load data. Please try again later.');
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'An unknown error occurred');
       } finally {
         setIsLoading(false);
       }
@@ -534,139 +568,32 @@ export default function EditGroupPage({ params }: EditGroupPageProps) {
     setIsSaving(true);
     setError(null);
     setSaveStatus(null);
-    let memberUpdateCount = 0;
-    const memberUpdateErrors: string[] = [];
 
     try {
-      // 1. Update Group Info
-      const groupPayload = {
-        name: data.name,
-        address: data.address,
-        registrationNumber: data.registrationNumber,
-        organization: data.organization,
-        leaderId: data.leaderId,
-        memberCount: data.memberCount,
-        dateOfStarting: data.dateOfStarting?.toISOString(),
-        description: data.description,
-        
-        // Collection settings
-        collectionFrequency: data.collectionFrequency,
-        collectionDayOfMonth: data.collectionDayOfMonth,
-        collectionDayOfWeek: data.collectionDayOfWeek,
-        collectionWeekOfMonth: data.collectionWeekOfMonth,
-        collectionMonth: data.collectionMonth,
-        collectionDate: data.collectionDate,
-        
-        // Banking details
-        bankAccountNumber: data.bankAccountNumber,
-        bankName: data.bankName,
-        
-        // Financial settings
-        cashInHand: data.cashInHand,
-        balanceInBank: data.balanceInBank,
-        interestRate: data.interestRate,
-        monthlyContribution: data.monthlyContribution,
-        // Removed globalShareAmount as requested
-        
-        // Insurance settings
-        loanInsuranceEnabled: data.loanInsuranceEnabled,
-        loanInsurancePercent: data.loanInsurancePercent,
-        loanInsuranceBalance: data.loanInsuranceBalance,
-        
-        // Social fund settings
-        groupSocialEnabled: data.groupSocialEnabled,
-        groupSocialAmountPerFamilyMember: data.groupSocialAmountPerFamilyMember,
-        groupSocialBalance: data.groupSocialBalance,
-        
-        // Period tracking
-        includeDataTillCurrentPeriod: data.includeDataTillCurrentPeriod,
-        currentPeriodMonth: data.currentPeriodMonth,
-        currentPeriodYear: data.currentPeriodYear,
-        
-        // Late fine settings - Transform late fine rule data to API format
-        lateFineRule: data.lateFineRule?.isEnabled ? {
-          isEnabled: data.lateFineRule.isEnabled,
-          ruleType: data.lateFineRule.ruleType,
-          dailyAmount: data.lateFineRule.dailyAmount,
-          dailyPercentage: data.lateFineRule.dailyPercentage,
-          tierRules: data.lateFineRule.ruleType === 'TIER_BASED' ? [
-            {
-              startDay: data.lateFineRule.tier1StartDay || 1,
-              endDay: data.lateFineRule.tier1EndDay || 5,
-              amount: data.lateFineRule.tier1Amount || 0,
-              isPercentage: false,
-            },
-            {
-              startDay: data.lateFineRule.tier2StartDay || 6,
-              endDay: data.lateFineRule.tier2EndDay || 15,
-              amount: data.lateFineRule.tier2Amount || 0,
-              isPercentage: false,
-            },
-            {
-              startDay: data.lateFineRule.tier3StartDay || 16,
-              endDay: 999,
-              amount: data.lateFineRule.tier3Amount || 0,
-              isPercentage: false,
-            },
-          ] : undefined,
-        } : {
-          isEnabled: false,
-          ruleType: undefined,
-          dailyAmount: undefined,
-          dailyPercentage: undefined,
-          tierRules: undefined,
-        },
+      // Prepare the data for submission
+      const submissionData = {
+        ...data,
+        dateOfStarting: data.dateOfStarting ? data.dateOfStarting.toISOString() : null,
+        // Map members data back to the expected API structure
+        members: data.members.map(member => ({
+          id: member.id,
+          currentLoanAmount: member.currentLoanAmount,
+          familyMembersCount: member.familyMembersCount,
+        })),
       };
 
-      const groupResponse = await fetch(`/api/groups/${groupId}`, {
+      const response = await fetch(`/api/groups/${groupId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(groupPayload),
+        body: JSON.stringify(submissionData),
       });
 
-      if (!groupResponse.ok) {
-        const errorData = await groupResponse.json();
+      if (!response.ok) {
+        const errorData = await response.json();
         throw new Error(`Failed to update group info: ${errorData.error || 'Unknown error'}`);
       }
 
-      // 2. Update Member Historical Data (Iterate through members in the form)
-      for (const member of data.members) {
-        const memberPayload = {
-          currentLoanAmount: member.currentLoanAmount,
-          familyMembersCount: member.familyMembersCount,
-        };
-
-        // Only send update if data is present
-        if (memberPayload.currentLoanAmount !== null || memberPayload.familyMembersCount !== null) {
-            try {
-                const memberResponse = await fetch(`/api/groups/${groupId}/members/${member.id}`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(memberPayload),
-                });
-
-                if (!memberResponse.ok) {
-                    const errorData = await memberResponse.json();
-                    memberUpdateErrors.push(`Member ${member.name}: ${errorData.error || 'Update failed'}`);
-                } else {
-                    memberUpdateCount++;
-                }
-            } catch (memberErr: any) {
-                 memberUpdateErrors.push(`Member ${member.name}: ${memberErr.message || 'Network error'}`);
-            }
-        }
-      }
-
-      // Set status based on results
-      let finalStatus = 'Group info updated successfully.';
-      if (memberUpdateCount > 0) {
-        finalStatus += ` Historical data updated for ${memberUpdateCount} member(s).`;
-      }
-      if (memberUpdateErrors.length > 0) {
-        finalStatus += ` Errors occurred for ${memberUpdateErrors.length} member(s).`;
-        setError(`Partial success. Member update errors: ${memberUpdateErrors.join('; ')}`);
-      }
-      setSaveStatus(finalStatus);
+      setSaveStatus('Group and member data updated successfully!');
       // Optionally reset dirty state after successful save
       // reset({}, { keepValues: true }); // Resets dirty state but keeps current values
 

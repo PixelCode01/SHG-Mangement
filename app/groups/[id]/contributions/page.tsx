@@ -75,10 +75,12 @@ interface GroupData {
   // Loan Insurance settings
   loanInsuranceEnabled?: boolean;
   loanInsurancePercent?: number;
+  loanInsuranceBalance?: number; // Previous balance from step 4 of group creation
   
   // Group Social settings
   groupSocialEnabled?: boolean;
   groupSocialAmountPerFamilyMember?: number;
+  groupSocialBalance?: number; // Previous balance from step 4 of group creation
   
   members: GroupMember[];
   userPermissions: {
@@ -133,6 +135,7 @@ interface ContributionRecord {
 interface MemberContributionStatus {
   memberId: string;
   memberName: string;
+  familySize: number; // Added family size
   expectedContribution: number;
   expectedInterest: number;
   currentLoanBalance: number;
@@ -945,6 +948,20 @@ export default function ContributionTrackingPage() {
         ? roundToTwoDecimals((groupData.groupSocialAmountPerFamilyMember || 0) * (member.familyMembersCount || 1))
         : 0;
       
+      // DEBUG: Enhanced logging for family member counts and group social calculation
+      if (groupData.groupSocialEnabled) {
+        console.log(`🔍 [Group Social Debug] ${member.name}:`, {
+          familyMembersCount: member.familyMembersCount,
+          familyMembersCountType: typeof member.familyMembersCount,
+          familyMembersCountIsNull: member.familyMembersCount === null,
+          familyMembersCountIsUndefined: member.familyMembersCount === undefined,
+          usedFamilySize: member.familyMembersCount || 1,
+          groupSocialAmountPerFamilyMember: groupData.groupSocialAmountPerFamilyMember,
+          calculatedGroupSocialAmount: groupSocialAmount,
+          memberObject: JSON.stringify(member, null, 2)
+        });
+      }
+      
       // Always calculate days late and late fine using frontend logic
       // Backend calculation is not reliable for late fines currently
       let daysLate = 0;
@@ -1075,6 +1092,7 @@ export default function ContributionTrackingPage() {
       return {
         memberId: member.id,
         memberName: member.name,
+        familySize: member.familySize || 0,
         expectedContribution: roundToTwoDecimals(expectedContribution),
         expectedInterest,
         currentLoanBalance: roundToTwoDecimals(currentLoanBalance),
@@ -1681,8 +1699,8 @@ export default function ContributionTrackingPage() {
         [`"New Cash in Hand","${previousCashInHand + totalCashInHand}"`],
         [`"New Cash in Bank","${previousCashInBank + totalCashInBank}"`],
         [`"Personal Loan Outstanding","${totalPersonalLoanOutstanding}"`],
-        ...(group.groupSocialEnabled && totalGroupSocial > 0 ? [[`"Group Social Fund","${totalGroupSocial}"`]] : []),
-        ...(group.loanInsuranceEnabled && totalLoanInsurance > 0 ? [[`"Loan Insurance Fund","${totalLoanInsurance}"`]] : []),
+        ...(group.groupSocialEnabled && totalGroupSocial > 0 ? [[`"Group Social Fund","${totalGroupSocial + (group.groupSocialBalance || 0)}"`]] : []),
+        ...(group.loanInsuranceEnabled && totalLoanInsurance > 0 ? [[`"Loan Insurance Fund","${totalLoanInsurance + (group.loanInsuranceBalance || 0)}"`]] : []),
         [],
         [`"TOTAL GROUP STANDING"`],
         [`"New Cash in Group","${newCashInGroup}"`],
@@ -2087,17 +2105,17 @@ export default function ContributionTrackingPage() {
 
       // Add fund rows if applicable
       if (group.groupSocialEnabled && totalGroupSocial > 0) {
-        cashSummaryData.push(['Group Social Fund', totalGroupSocial, '']);
+        cashSummaryData.push(['Group Social Fund', totalGroupSocial + (group.groupSocialBalance || 0), '']);
       }
       
       if (group.loanInsuranceEnabled && totalLoanInsurance > 0) {
-        cashSummaryData.push(['Loan Insurance Fund', totalLoanInsurance, '']);
+        cashSummaryData.push(['Loan Insurance Fund', totalLoanInsurance + (group.loanInsuranceBalance || 0), '']);
       }
 
       // Calculate and add group standing
       const newCashInGroup = previousMonthBalance + totalCollected;
-      const groupSocialFund = totalGroupSocial;
-      const loanInsuranceFund = totalLoanInsurance;
+      const groupSocialFund = totalGroupSocial + (group.groupSocialBalance || 0);
+      const loanInsuranceFund = totalLoanInsurance + (group.loanInsuranceBalance || 0);
       const totalGroupStanding = newCashInGroup + totalPersonalLoanOutstanding - groupSocialFund - loanInsuranceFund;
       const sharePerMember = group.memberCount > 0 ? totalGroupStanding / group.memberCount : 0;
 
@@ -2625,17 +2643,17 @@ export default function ContributionTrackingPage() {
 
       // Add conditional fund rows
       if (group.groupSocialEnabled && totalGroupSocial > 0) {
-        cashSummaryData.push(['Group Social Fund', formatCurrency(totalGroupSocial), '']);
+        cashSummaryData.push(['Group Social Fund', formatCurrency(totalGroupSocial + (group.groupSocialBalance || 0)), '']);
       }
       
       if (group.loanInsuranceEnabled && totalLoanInsurance > 0) {
-        cashSummaryData.push(['Loan Insurance Fund', formatCurrency(totalLoanInsurance), '']);
+        cashSummaryData.push(['Loan Insurance Fund', formatCurrency(totalLoanInsurance + (group.loanInsuranceBalance || 0)), '']);
       }
 
       // Calculate Group Standing using the specified formula
       const newCashInGroup = previousMonthBalance + totalCollected;
-      const groupSocialFund = totalGroupSocial;
-      const loanInsuranceFund = totalLoanInsurance;
+      const groupSocialFund = totalGroupSocial + (group.groupSocialBalance || 0);
+      const loanInsuranceFund = totalLoanInsurance + (group.loanInsuranceBalance || 0);
       const totalGroupStanding = newCashInGroup + totalPersonalLoanOutstanding - groupSocialFund - loanInsuranceFund;
       const sharePerMember = group.memberCount > 0 ? totalGroupStanding / group.memberCount : 0;
 
@@ -3670,11 +3688,11 @@ export default function ContributionTrackingPage() {
               return sum + (member.currentLoanBalance || 0);
             }, 0);
 
-            // Group Social Fund (current period contributions to GS fund - for now just this period)
-            const groupSocialFund = groupSocial;
+            // Group Social Fund = current period contributions + previous balance from step 4 of group creation
+            const groupSocialFund = groupSocial + (group.groupSocialBalance || 0);
 
-            // Loan Insurance Fund (current period contributions to LI fund - for now just this period)  
-            const loanInsuranceFund = loanInsurance;
+            // Loan Insurance Fund = current period contributions + previous balance from step 4 of group creation
+            const loanInsuranceFund = loanInsurance + (group.loanInsuranceBalance || 0);
 
             // Total Group Standing = New Cash in Group + Personal Loan Outstanding − Group Social Fund − Loan Insurance Fund
             const totalGroupStanding = newCashInGroup + personalLoanOutstanding - groupSocialFund - loanInsuranceFund;
@@ -4059,6 +4077,11 @@ export default function ContributionTrackingPage() {
                             title={`${member.memberName} - ₹${member.remainingAmount.toLocaleString()} remaining${member.daysLate > 0 ? ` (${member.daysLate} days late)` : ''}`}
                           >
                             {member.memberName}
+                            {member.familySize > 0 && (
+                              <span className="ml-1 text-xs text-gray-500 dark:text-gray-400">
+                                ({member.familySize})
+                              </span>
+                            )}
                             {member.status === 'PARTIAL' && (
                               <span className="ml-1 text-xs">
                                 (₹{member.remainingAmount.toLocaleString()})
@@ -4330,6 +4353,10 @@ export default function ContributionTrackingPage() {
                                       e.target.value = '';
                                     }
                                   }}
+                                  onWheel={(e) => {
+                                    // Prevent mouse wheel from changing number input values
+                                    e.currentTarget.blur();
+                                  }}
                                   onChange={(e) => {
                                     const inputValue = e.target.value;
                                     const value = Math.max(0, Number(inputValue) || 0);
@@ -4360,6 +4387,10 @@ export default function ContributionTrackingPage() {
                                     if (Number(e.target.value) === 0) {
                                       e.target.value = '';
                                     }
+                                  }}
+                                  onWheel={(e) => {
+                                    // Prevent mouse wheel from changing number input values
+                                    e.currentTarget.blur();
                                   }}
                                   onChange={(e) => {
                                     const inputValue = e.target.value;
@@ -4413,6 +4444,10 @@ export default function ContributionTrackingPage() {
                             if (Number(e.target.value) === 0) {
                               e.target.value = '';
                             }
+                          }}
+                          onWheel={(e) => {
+                            // Prevent mouse wheel from changing number input values
+                            e.currentTarget.blur();
                           }}
                           onChange={(e) => {
                             const inputValue = e.target.value;
@@ -4485,6 +4520,10 @@ export default function ContributionTrackingPage() {
                             if (Number(e.target.value) === 0) {
                               e.target.value = '';
                             }
+                          }}
+                          onWheel={(e) => {
+                            // Prevent mouse wheel from changing number input values
+                            e.currentTarget.blur();
                           }}
                           onChange={(e) => {
                             const inputValue = e.target.value;
@@ -4566,6 +4605,10 @@ export default function ContributionTrackingPage() {
                                     if (Number(e.target.value) === 0) {
                                       e.target.value = '';
                                     }
+                                  }}
+                                  onWheel={(e) => {
+                                    // Prevent mouse wheel from changing number input values
+                                    e.currentTarget.blur();
                                   }}
                                   onChange={(e) => {
                                     const inputValue = e.target.value;
@@ -4655,6 +4698,10 @@ export default function ContributionTrackingPage() {
                                 e.target.value = '';
                               }
                             }}
+                            onWheel={(e) => {
+                              // Prevent mouse wheel from changing number input values
+                              e.currentTarget.blur();
+                            }}
                             onChange={(e) => {
                               const inputValue = e.target.value;
                               const value = Math.max(0, Number(inputValue) || 0);
@@ -4724,6 +4771,10 @@ export default function ContributionTrackingPage() {
                                 e.target.value = '';
                               }
                             }}
+                            onWheel={(e) => {
+                              // Prevent mouse wheel from changing number input values
+                              e.currentTarget.blur();
+                            }}
                             onChange={(e) => {
                               const inputValue = e.target.value;
                               const value = Math.max(0, Number(inputValue) || 0);
@@ -4791,6 +4842,10 @@ export default function ContributionTrackingPage() {
                             if (Number(e.target.value) === 0) {
                               e.target.value = '';
                             }
+                          }}
+                          onWheel={(e) => {
+                            // Prevent mouse wheel from changing number input values
+                            e.currentTarget.blur();
                           }}
                           onChange={(e) => {
                             const inputValue = e.target.value;
@@ -6402,7 +6457,7 @@ export default function ContributionTrackingPage() {
       <ReportModal
         showModal={showReportModal}
         onClose={() => setShowReportModal(false)}
-        onGeneratePDF={generatePDFReport}
+        onGeneratePDF={handleDownloadPDF}
         onGenerateExcel={generateExcelReport}
         onGenerateCSV={generateCSVReport}
         periodName={showOldContributions && selectedPeriodId 

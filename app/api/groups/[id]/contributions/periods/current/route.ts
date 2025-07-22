@@ -135,12 +135,14 @@ export async function GET(
     if (!currentPeriod) {
       console.log(`📅 [Current Period API] No open periods found, creating one for ${currentMonth}/${currentYear}...`);
       
-      // Get the group to access collection frequency
+      // Get the group to access collection frequency and period configuration
       const group = await prisma.group.findUnique({
         where: { id: groupId },
         select: { 
           collectionFrequency: true,
-          dateOfStarting: true
+          dateOfStarting: true,
+          currentPeriodMonth: true,
+          currentPeriodYear: true
         }
       });
 
@@ -166,8 +168,20 @@ export async function GET(
         console.log(`   - Sequence: ${latestPeriod.recordSequenceNumber}`);
       }
 
-      // Calculate the current period date (10th of current month)
-      const currentPeriodDate = new Date(currentYear, currentMonth, 10);
+      // Use group's configured period if available, otherwise use current month
+      let periodMonth = currentMonth;
+      let periodYear = currentYear;
+      
+      if (group?.currentPeriodMonth && group?.currentPeriodYear) {
+        periodMonth = group.currentPeriodMonth - 1; // Convert to 0-based month index
+        periodYear = group.currentPeriodYear;
+        console.log(`📅 [Current Period API] Using group's configured period: ${group.currentPeriodMonth}/${group.currentPeriodYear}`);
+      } else {
+        console.log(`📅 [Current Period API] Using current calendar month: ${currentMonth + 1}/${currentYear}`);
+      }
+
+      // Calculate the current period date (10th of determined month/year)
+      const currentPeriodDate = new Date(periodYear, periodMonth, 10);
       
       console.log(`📅 [Current Period API] Creating period for: ${currentPeriodDate.toDateString()}`);
       
