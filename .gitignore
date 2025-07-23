@@ -39,3 +39,109 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Test files and analysis scripts (but keep essential build/config files)
+test-*.js
+*-test.js
+analyze-*.js
+debug-*.js
+check-*.js
+*-analysis.js
+*-debug.js
+*-check.js
+comprehensive-*.js
+final-*.js
+quick-*.js
+simple-*.js
+automated-*.js
+production-*.js
+validate-*.js
+verify-*.js
+create-*.js
+fix-*.js
+cleanup-*.js
+investigate-*.js
+reproduce-*.js
+simulate-*.js
+diagnose-*.js
+implement-*.js
+migrate-*.js
+setup-*.js
+reset-*.js
+seed-*.js
+deploy-*.js
+manual-*.js
+api-*.js
+browser-*.js
+frontend-*.js
+backend-*.js
+local-*.js
+emergency-*.js
+immediate-*.js
+
+# Exclude essential files from above patterns
+!migrate.js
+!reset.js
+!/utils/*.js
+
+# Documentation and analysis files (keep only essential docs)
+*.md
+!README.md
+!SECURITY.md
+
+# Zone Identifier files (Windows-specific metadata)
+*:Zone.Identifier
+
+# Text files and content samples
+*.txt
+!robots.txt
+
+# JSON test/analysis files (keep essential config files)
+*-test*.json
+*-analysis*.json
+*-report*.json
+*-results*.json
+manual-test-results.json
+contribution-test-report.json
+frontend-analysis-report.json
+
+# Shell scripts for testing/deployment
+*.sh
+!build.sh
+
+# PDF and CSV test files
+test-*.pdf
+sample-*.csv
+sample-*.xlsx
+extracted-*.csv
+
+# Backup and temporary files
+*.bak
+temp-*.sql
+
+# HTML test files
+test-*.html
+*-preview.html
+
+# TypeScript test files
+test-*.ts
+*-test.ts
+
+# mjs test files
+test-*.mjs
+*-test.mjs
+
+# Irrelevant files directory (already organized)
+/irrelevant-files/
+
+# IDE specific files
+.vscode/settings.json
+.idea/
+
+# Temporary directories
+/tmp/
+/test/
+
+# Log files
+*.log
+pdf_output.log

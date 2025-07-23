@@ -2,7 +2,7 @@
 
 A comprehensive **Self-Help Group (SHG) Management System** built with Next.js, designed to streamline the management of Self-Help Groups, their members, contributions, loans, and financial records.
 
-## 🌐 Live Application
+## Live Application
 
 **Access the live application**: [https://shg-mangement.vercel.app/](https://shg-mangement.vercel.app/)
 
@@ -13,19 +13,19 @@ A comprehensive **Self-Help Group (SHG) Management System** built with Next.js, 
 4. Start managing your Self-Help Groups immediately!
 
 ### Demo Features Available
-- ✅ **User Registration & Login** - Create your account and start using the system
-- ✅ **Group Management** - Create and manage multiple self-help groups
-- ✅ **Member Management** - Add members manually or import from PDF/Excel
-- ✅ **Contribution Tracking** - Track member payments and contributions
-- ✅ **Financial Reports** - Generate comprehensive financial reports
-- ✅ **Period Management** - Manage collection periods and transitions
-- ✅ **Loan Management** - Handle member loans and interest calculations
-- ✅ **PDF Import** - Advanced PDF parsing for member data extraction
+-  **User Registration & Login** - Create your account and start using the system
+-  **Group Management** - Create and manage multiple self-help groups
+-  **Member Management** - Add members manually or import from PDF/Excel
+-  **Contribution Tracking** - Track member payments and contributions
+-  **Financial Reports** - Generate comprehensive financial reports
+-  **Period Management** - Manage collection periods and transitions
+-  **Loan Management** - Handle member loans and interest calculations
+-  **PDF Import** - Advanced PDF parsing for member data extraction
 
-## 🚀 Deployment
+##  Deployment
 
 ### Live Production App
-**🌐 Live URL**: [https://shg-mangement.vercel.app/](https://shg-mangement.vercel.app/)
+** Live URL**: [https://shg-mangement.vercel.app/](https://shg-mangement.vercel.app/)
 
 The application is deployed on Vercel and ready for production use. All features are fully functional in the live environment.
 
@@ -83,7 +83,7 @@ NEXTAUTH_SECRET="production-secret"
 NEXTAUTH_URL="https://your-domain.com"
 ```
 
-## 🎯 Core Features
+##  Core Features
 
 ### 1. User Authentication & Authorization
 
@@ -250,7 +250,7 @@ NEXTAUTH_URL="https://your-domain.com"
 - **Data Carryover**: Unpaid amounts carry to next period
 - **Seamless Transition**: Smooth period-to-period flow
 
-## 📋 How to Use
+##  How to Use
 
 ### For Group Leaders
 
@@ -276,7 +276,7 @@ NEXTAUTH_URL="https://your-domain.com"
 3. **System Reports**: Generate system-wide reports
 4. **Data Management**: Handle data imports and exports
 
-## 🛠️ Technical Features
+##  Technical Features
 
 ### Built With
 - **Frontend**: Next.js 15, React 19, TypeScript
@@ -302,7 +302,7 @@ NEXTAUTH_URL="https://your-domain.com"
 - **Caching**: Smart data caching
 - **Lazy Loading**: Optimized component loading
 
-## 📖 API Documentation
+##  API Documentation
 
 ### Authentication Endpoints
 - `POST /api/auth/register` - User registration
@@ -334,7 +334,7 @@ NEXTAUTH_URL="https://your-domain.com"
 - `GET /api/groups/[id]/periodic-records` - Get periodic records
 - `POST /api/groups/[id]/periodic-records` - Create periodic record
 
-## 🔧 Configuration
+##  Configuration
 
 ### Collection Frequencies
 - **Weekly**: Every week on specified day
@@ -353,22 +353,8 @@ NEXTAUTH_URL="https://your-domain.com"
 - **Date Fields**: Date selection
 - **Boolean Fields**: True/false options
 
-## 🧪 Testing
 
-### Run Tests
-```bash
-npm run test
-```
-
-### Test Features
-- **Registration Flow**: Test user registration
-- **Group Creation**: Test group setup
-- **Contribution Tracking**: Test payment processing
-- **Period Management**: Test period transitions
-- **PDF Import**: Test member data import
-
-
-## 📊 Database Schema
+##  Database Schema
 
 ### Core Models
 - **User**: Authentication and user management
@@ -386,13 +372,6 @@ npm run test
 - Loans belong to Members and Groups
 - Users can be Members or Group Leaders
 
-## 🚀 Deployment
-
-### Live Production App
-**🌐 Live URL**: [https://shg-mangement.vercel.app/](https://shg-mangement.vercel.app/)
-
-The application is deployed on Vercel and ready for production use. All features are fully functional in the live environment.
-
 ## 🐛 Troubleshooting
 
 ### Common Issues
@@ -403,30 +382,3 @@ The application is deployed on Vercel and ready for production use. All features
 
 ### Debug Mode
 Set `DEBUG=true` in environment variables for detailed logging.
-
-## 📞 Support
-
-For technical support or questions about the SHG Management System:
-1. Check the troubleshooting guide
-2. Review the API documentation
-3. Examine the test scripts for examples
-4. Contact the development team
-
-## 🎯 Future Enhancements
-
-### Planned Features
-- **Mobile App**: React Native mobile application
-- **SMS Integration**: SMS notifications for payments
-- **Advanced Analytics**: AI-powered financial insights
-- **Multi-language Support**: Support for regional languages
-- **Blockchain Integration**: Immutable financial records
-
-### Community Features
-- **Group Networking**: Connect with other groups
-- **Knowledge Sharing**: Share best practices
-- **Resource Library**: Educational materials
-- **Forums**: Community discussions
-
----
-
-**SHG Management System** - Empowering Self-Help Groups with comprehensive digital management tools.
