@@ -4215,22 +4215,6 @@ The PDF may contain scanned images or use an unsupported format.
                 >
                   {isLoading ? (isEditing ? 'Updating Group...' : 'Creating Group...') : (isEditing ? 'Update Group' : 'Create Group')}
                 </button>
-                {/* Debug Button for Family Size Testing */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    console.log("=== FAMILY SIZE DEBUG - FORM STATE ===");
-                    const formValues = getValues();
-                    console.log("Form values:", formValues);
-                    console.log("Members with family size:", formValues.members?.map(m => ({
-                      name: m.name,
-                      familyMembersCount: m.familyMembersCount
-                    })));
-                  }}
-                  className="ml-2 px-3 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-                >
-                  Debug Family Size
-                </button>
               </>
             )}
           </div>

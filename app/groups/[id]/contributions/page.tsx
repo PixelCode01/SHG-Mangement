@@ -1453,6 +1453,80 @@ export default function ContributionTrackingPage() {
     }
   };
 
+  // Function to mark a contribution as unpaid
+  const markContributionUnpaid = async (memberId: string) => {
+    if (!currentPeriod) return;
+    
+    setSavingPayment(memberId);
+    
+    try {
+      const contributionId = actualContributions[memberId]?.id;
+      if (!contributionId) {
+        throw new Error('No contribution record found for this member');
+      }
+
+      const response = await fetch(`/api/groups/${groupId}/contributions/${contributionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          compulsoryContributionPaid: 0,
+          loanInterestPaid: 0,
+          lateFinePaid: 0,
+          groupSocialPaid: 0,
+          loanInsurancePaid: 0,
+          totalPaid: 0,
+          status: 'PENDING'
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to mark contribution as unpaid');
+      }
+
+      const { contribution: updatedContribution } = await response.json();
+
+      // Update local state
+      setActualContributions((prev: any) => ({
+        ...prev,
+        [memberId]: updatedContribution
+      }));
+
+      // Reset the member collection state
+      setMemberCollections(prev => ({
+        ...prev,
+        [memberId]: {
+          cashAmount: 0,
+          bankAmount: 0,
+          compulsoryContribution: 0,
+          interestPaid: 0,
+          loanRepayment: 0,
+          lateFinePaid: 0,
+          loanInsurancePaid: 0,
+          groupSocialPaid: 0,
+          remainingLoan: memberContributions.find(c => c.memberId === memberId)?.currentLoanBalance || 0,
+          submissionDate: new Date()
+        }
+      }));
+
+      // Refresh the data
+      await Promise.all([
+        fetchGroupData(),
+        fetchCurrentPeriod(),
+        fetchContributions()
+      ]);
+
+      alert('Contribution marked as unpaid successfully!');
+      
+    } catch (err) {
+      console.error('Error marking contribution as unpaid:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Failed to mark contribution as unpaid';
+      alert(`Error: ${errorMessage}`);
+    } finally {
+      setSavingPayment(null);
+    }
+  };
+
   // Payment modal helper functions
   const calculateAutoAllocation = () => {
     if (!selectedMember) return;
@@ -4180,105 +4254,132 @@ export default function ContributionTrackingPage() {
                       )}
                     </td>
                     <td className="px-4 py-4 whitespace-nowrap">
-                      {(() => {
-                        // Calculate max total due amount for validation
-                        const maxTotalDue = contribution.expectedContribution + 
-                                          contribution.expectedInterest + 
-                                          (contribution.lateFineAmount || 0) + 
-                                          (contribution.loanInsuranceAmount || 0) + 
-                                          (contribution.groupSocialAmount || 0) + 
-                                          contribution.currentLoanBalance;
-                        
-                        return (
-                          <>
-                            <div className="grid grid-cols-2 gap-3">
-                              <div>
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Cash</label>
-                                <input
-                                  type="number"
-                                  value={memberCollection.cashAmount === 0 ? '' : memberCollection.cashAmount}
-                                  onFocus={(e) => {
-                                    // Clear field if value is 0 for better UX
-                                    if (Number(e.target.value) === 0) {
-                                      e.target.value = '';
-                                    }
-                                  }}
-                                  onWheel={(e) => {
-                                    // Prevent mouse wheel from changing number input values
-                                    e.currentTarget.blur();
-                                  }}
-                                  onChange={(e) => {
-                                    const inputValue = e.target.value;
-                                    const value = Math.max(0, Number(inputValue) || 0);
-                                    // Round up decimal values
-                                    const roundedValue = Math.ceil(value);
-                                    handleCollectionChange('cashAmount', roundedValue);
-                                  }}
-                                  className={`w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary dark:bg-gray-700 dark:text-gray-100 ${
-                                    memberCollection.cashAmount > Math.max(0, maxTotalDue - memberCollection.bankAmount)
-                                      ? 'border-red-500 dark:border-red-400 bg-red-50 dark:bg-red-900/20'
-                                      : 'border-gray-300 dark:border-gray-600'
-                                  }`}
-                                  min="0"
-                                  max={Math.max(0, maxTotalDue - memberCollection.bankAmount)}
-                                  step="1"
-                                  disabled={currentPeriod?.isClosed}
-                                  placeholder="0"
-                                  title={`Maximum allowed: ₹${Math.max(0, maxTotalDue - memberCollection.bankAmount)}`}
-                                />
-                              </div>
-                              <div>
-                                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Bank</label>
-                                <input
-                                  type="number"
-                                  value={memberCollection.bankAmount === 0 ? '' : memberCollection.bankAmount}
-                                  onFocus={(e) => {
-                                    // Clear field if value is 0 for better UX
-                                    if (Number(e.target.value) === 0) {
-                                      e.target.value = '';
-                                    }
-                                  }}
-                                  onWheel={(e) => {
-                                    // Prevent mouse wheel from changing number input values
-                                    e.currentTarget.blur();
-                                  }}
-                                  onChange={(e) => {
-                                    const inputValue = e.target.value;
-                                    const value = Math.max(0, Number(inputValue) || 0);
-                                    // Round up decimal values
-                                    const roundedValue = Math.ceil(value);
-                                    handleCollectionChange('bankAmount', roundedValue);
-                                  }}
-                                  className={`w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary dark:bg-gray-700 dark:text-gray-100 ${
-                                    memberCollection.bankAmount > Math.max(0, maxTotalDue - memberCollection.cashAmount)
-                                      ? 'border-red-500 dark:border-red-400 bg-red-50 dark:bg-red-900/20'
-                                      : 'border-gray-300 dark:border-gray-600'
-                                  }`}
-                                  min="0"
-                                  max={Math.max(0, maxTotalDue - memberCollection.cashAmount)}
-                                  step="1"
-                                  disabled={currentPeriod?.isClosed}
-                                  placeholder="0"
-                                  title={`Maximum allowed: ₹${Math.max(0, maxTotalDue - memberCollection.cashAmount)}`}
-                                />
+                      {showCompleted ? (
+                        // Show actual cash/bank amounts for completed contributions
+                        <div className="text-center">
+                          <div className="text-sm font-medium text-foreground mb-2">Collection Details</div>
+                          <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded p-2">
+                              <div className="text-gray-600 dark:text-gray-400 mb-1">Cash</div>
+                              <div className="font-semibold text-green-800 dark:text-green-300">
+                                ₹{formatCurrency(memberCollection.cashAmount || 0)}
                               </div>
                             </div>
-                            <div className="text-sm text-gray-600 dark:text-gray-400 mt-2 text-center">
-                              <div className="font-medium">
-                                Total: ₹{formatCurrency(memberCollection.cashAmount + memberCollection.bankAmount)}
+                            <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded p-2">
+                              <div className="text-gray-600 dark:text-gray-400 mb-1">Bank</div>
+                              <div className="font-semibold text-green-800 dark:text-green-300">
+                                ₹{formatCurrency(memberCollection.bankAmount || 0)}
                               </div>
-                              <div className="text-xs mt-1">
-                                Max Due: ₹{formatCurrency(maxTotalDue)}
-                              </div>
-                              {(memberCollection.cashAmount + memberCollection.bankAmount) > maxTotalDue && (
-                                <div className="text-red-500 text-xs mt-1 font-medium">
-                                  ⚠️ Exceeds total due amount
+                            </div>
+                          </div>
+                          <div className="text-sm text-gray-600 dark:text-gray-400 mt-2 text-center">
+                            <div className="font-medium">
+                              Total: ₹{formatCurrency((memberCollection.cashAmount || 0) + (memberCollection.bankAmount || 0))}
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        // Show input fields for pending contributions
+                        (() => {
+                          // Calculate max total due amount for validation
+                          const maxTotalDue = contribution.expectedContribution + 
+                                            contribution.expectedInterest + 
+                                            (contribution.lateFineAmount || 0) + 
+                                            (contribution.loanInsuranceAmount || 0) + 
+                                            (contribution.groupSocialAmount || 0) + 
+                                            contribution.currentLoanBalance;
+                          
+                          return (
+                            <>
+                              <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Cash</label>
+                                  <input
+                                    type="number"
+                                    value={memberCollection.cashAmount === 0 ? '' : memberCollection.cashAmount}
+                                    onFocus={(e) => {
+                                      // Clear field if value is 0 for better UX
+                                      if (Number(e.target.value) === 0) {
+                                        e.target.value = '';
+                                      }
+                                    }}
+                                    onWheel={(e) => {
+                                      // Prevent mouse wheel from changing number input values
+                                      e.currentTarget.blur();
+                                    }}
+                                    onChange={(e) => {
+                                      const inputValue = e.target.value;
+                                      const value = Math.max(0, Number(inputValue) || 0);
+                                      // Round up decimal values
+                                      const roundedValue = Math.ceil(value);
+                                      handleCollectionChange('cashAmount', roundedValue);
+                                    }}
+                                    className={`w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary dark:bg-gray-700 dark:text-gray-100 ${
+                                      memberCollection.cashAmount > Math.max(0, maxTotalDue - memberCollection.bankAmount)
+                                        ? 'border-red-500 dark:border-red-400 bg-red-50 dark:bg-red-900/20'
+                                        : 'border-gray-300 dark:border-gray-600'
+                                    }`}
+                                    min="0"
+                                    max={Math.max(0, maxTotalDue - memberCollection.bankAmount)}
+                                    step="1"
+                                    disabled={currentPeriod?.isClosed}
+                                    placeholder="0"
+                                    title={`Maximum allowed: ₹${Math.max(0, maxTotalDue - memberCollection.bankAmount)}`}
+                                  />
                                 </div>
-                              )}
-                            </div>
-                          </>
-                        );
-                      })()}
+                                <div>
+                                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Bank</label>
+                                  <input
+                                    type="number"
+                                    value={memberCollection.bankAmount === 0 ? '' : memberCollection.bankAmount}
+                                    onFocus={(e) => {
+                                      // Clear field if value is 0 for better UX
+                                      if (Number(e.target.value) === 0) {
+                                        e.target.value = '';
+                                      }
+                                    }}
+                                    onWheel={(e) => {
+                                      // Prevent mouse wheel from changing number input values
+                                      e.currentTarget.blur();
+                                    }}
+                                    onChange={(e) => {
+                                      const inputValue = e.target.value;
+                                      const value = Math.max(0, Number(inputValue) || 0);
+                                      // Round up decimal values
+                                      const roundedValue = Math.ceil(value);
+                                      handleCollectionChange('bankAmount', roundedValue);
+                                    }}
+                                    className={`w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary dark:bg-gray-700 dark:text-gray-100 ${
+                                      memberCollection.bankAmount > Math.max(0, maxTotalDue - memberCollection.cashAmount)
+                                        ? 'border-red-500 dark:border-red-400 bg-red-50 dark:bg-red-900/20'
+                                        : 'border-gray-300 dark:border-gray-600'
+                                    }`}
+                                    min="0"
+                                    max={Math.max(0, maxTotalDue - memberCollection.cashAmount)}
+                                    step="1"
+                                    disabled={currentPeriod?.isClosed}
+                                    placeholder="0"
+                                    title={`Maximum allowed: ₹${Math.max(0, maxTotalDue - memberCollection.cashAmount)}`}
+                                  />
+                                </div>
+                              </div>
+                              <div className="text-sm text-gray-600 dark:text-gray-400 mt-2 text-center">
+                                <div className="font-medium">
+                                  Total: ₹{formatCurrency(memberCollection.cashAmount + memberCollection.bankAmount)}
+                                </div>
+                                <div className="text-xs mt-1">
+                                  Max Due: ₹{formatCurrency(maxTotalDue)}
+                                </div>
+                                {(memberCollection.cashAmount + memberCollection.bankAmount) > maxTotalDue && (
+                                  <div className="text-red-500 text-xs mt-1 font-medium">
+                                    ⚠️ Exceeds total due amount
+                                  </div>
+                                )}
+                              </div>
+                            </>
+                          );
+                        })()
+                      )}
                     </td>
                     <td className="px-3 py-4 whitespace-nowrap">
                       <div className="text-sm font-medium text-foreground mb-1">
@@ -4286,74 +4387,82 @@ export default function ContributionTrackingPage() {
                       </div>
                       <div>
                         <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Paid Amount</label>
-                        <input
-                          type="number"
-                          value={memberCollection.compulsoryContribution === 0 ? '' : memberCollection.compulsoryContribution}
-                          onFocus={(e) => {
-                            // Clear field if value is 0 for better UX
-                            if (Number(e.target.value) === 0) {
-                              e.target.value = '';
-                            }
-                          }}
-                          onWheel={(e) => {
-                            // Prevent mouse wheel from changing number input values
-                            e.currentTarget.blur();
-                          }}
-                          onChange={(e) => {
-                            const inputValue = e.target.value;
-                            const value = Math.max(0, Number(inputValue) || 0);
-                            const maxAmount = contribution.expectedContribution;
-                            
-                            // Calculate total dues to prevent overpayment
-                            const totalDues = contribution.expectedContribution + contribution.expectedInterest + contribution.lateFineAmount;
-                            const currentOtherPayments = (memberCollection.interestPaid || 0) + (memberCollection.lateFinePaid || 0) + (memberCollection.loanRepayment || 0);
-                            const maxAllowedForThisField = Math.min(maxAmount, totalDues - currentOtherPayments);
-                            
-                            // Round up decimal values
-                            const roundedValue = Math.ceil(value);
-                            const finalValue = Math.min(roundedValue, Math.max(0, maxAllowedForThisField));
-                            
-                            // Auto-allocate to cash by default when entering payment
-                            const updatedCollection = {
-                              ...memberCollection,
-                              compulsoryContribution: finalValue
-                            };
-                            
-                            // Recalculate total cash/bank allocation based on all payments
-                            const totalPayments = (updatedCollection.compulsoryContribution || 0) + 
-                                                (updatedCollection.interestPaid || 0) + 
-                                                (updatedCollection.lateFinePaid || 0) + 
-                                                (updatedCollection.groupSocialPaid || 0) + 
-                                                (updatedCollection.loanInsurancePaid || 0) + 
-                                                (updatedCollection.loanRepayment || 0);
-                            
-                            // If there are payments but no cash/bank allocation, auto-allocate to cash
-                            if (totalPayments > 0 && (updatedCollection.cashAmount + updatedCollection.bankAmount) === 0) {
-                              updatedCollection.cashAmount = totalPayments;
-                              updatedCollection.bankAmount = 0;
-                            }
-                            // If payments changed and there's existing allocation, update proportionally
-                            else if (totalPayments > 0 && (updatedCollection.cashAmount + updatedCollection.bankAmount) > 0) {
-                              const currentTotal = updatedCollection.cashAmount + updatedCollection.bankAmount;
-                              if (currentTotal !== totalPayments) {
-                                // Keep the same ratio but adjust total
-                                const cashRatio = updatedCollection.cashAmount / currentTotal;
-                                updatedCollection.cashAmount = Math.ceil(totalPayments * cashRatio);
-                                updatedCollection.bankAmount = totalPayments - updatedCollection.cashAmount;
+                        {showCompleted ? (
+                          // Show actual paid amount for completed contributions
+                          <div className="px-2 py-1 text-xs bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded text-green-800 dark:text-green-300 font-medium">
+                            ₹{formatCurrency(actualContributions[memberId]?.compulsoryContributionPaid || 0)}
+                          </div>
+                        ) : (
+                          // Show input field for pending contributions
+                          <input
+                            type="number"
+                            value={memberCollection.compulsoryContribution === 0 ? '' : memberCollection.compulsoryContribution}
+                            onFocus={(e) => {
+                              // Clear field if value is 0 for better UX
+                              if (Number(e.target.value) === 0) {
+                                e.target.value = '';
                               }
-                            }
-                            
-                            setMemberCollections(prev => ({
-                              ...prev,
-                              [memberId]: updatedCollection
-                            }));
-                          }}
-                          className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-green-500 dark:bg-gray-700 dark:text-gray-100"
-                          min="0"
-                          max={contribution.expectedContribution}
-                          step="0.01"
-                          disabled={currentPeriod?.isClosed}
-                        />
+                            }}
+                            onWheel={(e) => {
+                              // Prevent mouse wheel from changing number input values
+                              e.currentTarget.blur();
+                            }}
+                            onChange={(e) => {
+                              const inputValue = e.target.value;
+                              const value = Math.max(0, Number(inputValue) || 0);
+                              const maxAmount = contribution.expectedContribution;
+                              
+                              // Calculate total dues to prevent overpayment
+                              const totalDues = contribution.expectedContribution + contribution.expectedInterest + contribution.lateFineAmount;
+                              const currentOtherPayments = (memberCollection.interestPaid || 0) + (memberCollection.lateFinePaid || 0) + (memberCollection.loanRepayment || 0);
+                              const maxAllowedForThisField = Math.min(maxAmount, totalDues - currentOtherPayments);
+                              
+                              // Round up decimal values
+                              const roundedValue = Math.ceil(value);
+                              const finalValue = Math.min(roundedValue, Math.max(0, maxAllowedForThisField));
+                              
+                              // Auto-allocate to cash by default when entering payment
+                              const updatedCollection = {
+                                ...memberCollection,
+                                compulsoryContribution: finalValue
+                              };
+                              
+                              // Recalculate total cash/bank allocation based on all payments
+                              const totalPayments = (updatedCollection.compulsoryContribution || 0) + 
+                                                  (updatedCollection.interestPaid || 0) + 
+                                                  (updatedCollection.lateFinePaid || 0) + 
+                                                  (updatedCollection.groupSocialPaid || 0) + 
+                                                  (updatedCollection.loanInsurancePaid || 0) + 
+                                                  (updatedCollection.loanRepayment || 0);
+                              
+                              // If there are payments but no cash/bank allocation, auto-allocate to cash
+                              if (totalPayments > 0 && (updatedCollection.cashAmount + updatedCollection.bankAmount) === 0) {
+                                updatedCollection.cashAmount = totalPayments;
+                                updatedCollection.bankAmount = 0;
+                              }
+                              // If payments changed and there's existing allocation, update proportionally
+                              else if (totalPayments > 0 && (updatedCollection.cashAmount + updatedCollection.bankAmount) > 0) {
+                                const currentTotal = updatedCollection.cashAmount + updatedCollection.bankAmount;
+                                if (currentTotal !== totalPayments) {
+                                  // Keep the same ratio but adjust total
+                                  const cashRatio = updatedCollection.cashAmount / currentTotal;
+                                  updatedCollection.cashAmount = Math.ceil(totalPayments * cashRatio);
+                                  updatedCollection.bankAmount = totalPayments - updatedCollection.cashAmount;
+                                }
+                              }
+                              
+                              setMemberCollections(prev => ({
+                                ...prev,
+                                [memberId]: updatedCollection
+                              }));
+                            }}
+                            className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-green-500 dark:bg-gray-700 dark:text-gray-100"
+                            min="0"
+                            max={contribution.expectedContribution}
+                            step="0.01"
+                            disabled={currentPeriod?.isClosed}
+                          />
+                        )}
                       </div>
                     </td>
                     <td className="px-3 py-4 whitespace-nowrap">
@@ -4362,74 +4471,82 @@ export default function ContributionTrackingPage() {
                       </div>
                       <div>
                         <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Paid Amount</label>
-                        <input
-                          type="number"
-                          value={memberCollection.interestPaid === 0 ? '' : memberCollection.interestPaid}
-                          onFocus={(e) => {
-                            // Clear field if value is 0 for better UX
-                            if (Number(e.target.value) === 0) {
-                              e.target.value = '';
-                            }
-                          }}
-                          onWheel={(e) => {
-                            // Prevent mouse wheel from changing number input values
-                            e.currentTarget.blur();
-                          }}
-                          onChange={(e) => {
-                            const inputValue = e.target.value;
-                            const value = Math.max(0, Number(inputValue) || 0);
-                            const maxAmount = contribution.expectedInterest;
-                            
-                            // Calculate total dues to prevent overpayment
-                            const totalDues = contribution.expectedContribution + contribution.expectedInterest + contribution.lateFineAmount;
-                            const currentOtherPayments = (memberCollection.compulsoryContribution || 0) + (memberCollection.lateFinePaid || 0) + (memberCollection.loanRepayment || 0);
-                            const maxAllowedForThisField = Math.min(maxAmount, totalDues - currentOtherPayments);
-                            
-                            // Round up decimal values
-                            const roundedValue = Math.ceil(value);
-                            const finalValue = Math.min(roundedValue, Math.max(0, maxAllowedForThisField));
-                            
-                            // Auto-allocate to cash by default when entering payment
-                            const updatedCollection = {
-                              ...memberCollection,
-                              interestPaid: finalValue
-                            };
-                            
-                            // Recalculate total cash/bank allocation based on all payments
-                            const totalPayments = (updatedCollection.compulsoryContribution || 0) + 
-                                                (updatedCollection.interestPaid || 0) + 
-                                                (updatedCollection.lateFinePaid || 0) + 
-                                                (updatedCollection.groupSocialPaid || 0) + 
-                                                (updatedCollection.loanInsurancePaid || 0) + 
-                                                (updatedCollection.loanRepayment || 0);
-                            
-                            // If there are payments but no cash/bank allocation, auto-allocate to cash
-                            if (totalPayments > 0 && (updatedCollection.cashAmount + updatedCollection.bankAmount) === 0) {
-                              updatedCollection.cashAmount = totalPayments;
-                              updatedCollection.bankAmount = 0;
-                            }
-                            // If payments changed and there's existing allocation, update proportionally
-                            else if (totalPayments > 0 && (updatedCollection.cashAmount + updatedCollection.bankAmount) > 0) {
-                              const currentTotal = updatedCollection.cashAmount + updatedCollection.bankAmount;
-                              if (currentTotal !== totalPayments) {
-                                // Keep the same ratio but adjust total
-                                const cashRatio = updatedCollection.cashAmount / currentTotal;
-                                updatedCollection.cashAmount = Math.ceil(totalPayments * cashRatio);
-                                updatedCollection.bankAmount = totalPayments - updatedCollection.cashAmount;
+                        {showCompleted ? (
+                          // Show actual paid amount for completed contributions
+                          <div className="px-2 py-1 text-xs bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded text-green-800 dark:text-green-300 font-medium">
+                            ₹{formatCurrency(actualContributions[memberId]?.loanInterestPaid || 0)}
+                          </div>
+                        ) : (
+                          // Show input field for pending contributions
+                          <input
+                            type="number"
+                            value={memberCollection.interestPaid === 0 ? '' : memberCollection.interestPaid}
+                            onFocus={(e) => {
+                              // Clear field if value is 0 for better UX
+                              if (Number(e.target.value) === 0) {
+                                e.target.value = '';
                               }
-                            }
-                            
-                            setMemberCollections(prev => ({
-                              ...prev,
-                              [memberId]: updatedCollection
-                            }));
-                          }}
-                          className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-100"
-                          min="0"
-                          max={contribution.expectedInterest}
-                          step="0.01"
-                          disabled={currentPeriod?.isClosed}
-                        />
+                            }}
+                            onWheel={(e) => {
+                              // Prevent mouse wheel from changing number input values
+                              e.currentTarget.blur();
+                            }}
+                            onChange={(e) => {
+                              const inputValue = e.target.value;
+                              const value = Math.max(0, Number(inputValue) || 0);
+                              const maxAmount = contribution.expectedInterest;
+                              
+                              // Calculate total dues to prevent overpayment
+                              const totalDues = contribution.expectedContribution + contribution.expectedInterest + contribution.lateFineAmount;
+                              const currentOtherPayments = (memberCollection.compulsoryContribution || 0) + (memberCollection.lateFinePaid || 0) + (memberCollection.loanRepayment || 0);
+                              const maxAllowedForThisField = Math.min(maxAmount, totalDues - currentOtherPayments);
+                              
+                              // Round up decimal values
+                              const roundedValue = Math.ceil(value);
+                              const finalValue = Math.min(roundedValue, Math.max(0, maxAllowedForThisField));
+                              
+                              // Auto-allocate to cash by default when entering payment
+                              const updatedCollection = {
+                                ...memberCollection,
+                                interestPaid: finalValue
+                              };
+                              
+                              // Recalculate total cash/bank allocation based on all payments
+                              const totalPayments = (updatedCollection.compulsoryContribution || 0) + 
+                                                  (updatedCollection.interestPaid || 0) + 
+                                                  (updatedCollection.lateFinePaid || 0) + 
+                                                  (updatedCollection.groupSocialPaid || 0) + 
+                                                  (updatedCollection.loanInsurancePaid || 0) + 
+                                                  (updatedCollection.loanRepayment || 0);
+                              
+                              // If there are payments but no cash/bank allocation, auto-allocate to cash
+                              if (totalPayments > 0 && (updatedCollection.cashAmount + updatedCollection.bankAmount) === 0) {
+                                updatedCollection.cashAmount = totalPayments;
+                                updatedCollection.bankAmount = 0;
+                              }
+                              // If payments changed and there's existing allocation, update proportionally
+                              else if (totalPayments > 0 && (updatedCollection.cashAmount + updatedCollection.bankAmount) > 0) {
+                                const currentTotal = updatedCollection.cashAmount + updatedCollection.bankAmount;
+                                if (currentTotal !== totalPayments) {
+                                  // Keep the same ratio but adjust total
+                                  const cashRatio = updatedCollection.cashAmount / currentTotal;
+                                  updatedCollection.cashAmount = Math.ceil(totalPayments * cashRatio);
+                                  updatedCollection.bankAmount = totalPayments - updatedCollection.cashAmount;
+                                }
+                              }
+                              
+                              setMemberCollections(prev => ({
+                                ...prev,
+                                [memberId]: updatedCollection
+                              }));
+                            }}
+                            className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-100"
+                            min="0"
+                            max={contribution.expectedInterest}
+                            step="0.01"
+                            disabled={currentPeriod?.isClosed}
+                          />
+                        )}
                       </div>
                     </td>
                     {lateFinesEnabled && (
@@ -4439,6 +4556,50 @@ export default function ContributionTrackingPage() {
                           const submissionDate = memberCollection.submissionDate || new Date();
                           const { daysLate, lateFineAmount } = calculateLateFineForSubmissionDate(group!, submissionDate, contribution.expectedContribution);
                           
+                          // Auto-correct late fine paid amount if it exceeds the due amount or if no fine is due
+                          const currentLateFinesPaid = memberCollection.lateFinePaid || 0;
+                          if ((lateFineAmount === 0 && currentLateFinesPaid > 0) || (lateFineAmount > 0 && currentLateFinesPaid > lateFineAmount)) {
+                            // Immediately update the state to correct the late fine paid amount
+                            setTimeout(() => {
+                              const correctedLateFinesPaid = lateFineAmount === 0 ? 0 : Math.min(currentLateFinesPaid, lateFineAmount);
+                              
+                              const updatedCollection = {
+                                ...memberCollection,
+                                lateFinePaid: correctedLateFinesPaid
+                              };
+                              
+                              // Recalculate total payments with corrected late fine
+                              const totalPayments = (updatedCollection.compulsoryContribution || 0) + 
+                                                  (updatedCollection.interestPaid || 0) + 
+                                                  (updatedCollection.lateFinePaid || 0) + 
+                                                  (updatedCollection.groupSocialPaid || 0) + 
+                                                  (updatedCollection.loanInsurancePaid || 0) + 
+                                                  (updatedCollection.loanRepayment || 0);
+                              
+                              // Update cash/bank allocation
+                              if (totalPayments > 0) {
+                                if ((updatedCollection.cashAmount + updatedCollection.bankAmount) > totalPayments) {
+                                  // Reduce allocation proportionally if current allocation exceeds new total
+                                  const currentTotal = updatedCollection.cashAmount + updatedCollection.bankAmount;
+                                  if (currentTotal > 0) {
+                                    const cashRatio = updatedCollection.cashAmount / currentTotal;
+                                    updatedCollection.cashAmount = Math.ceil(totalPayments * cashRatio);
+                                    updatedCollection.bankAmount = totalPayments - updatedCollection.cashAmount;
+                                  }
+                                }
+                              } else {
+                                // If no payments, reset cash/bank amounts
+                                updatedCollection.cashAmount = 0;
+                                updatedCollection.bankAmount = 0;
+                              }
+                              
+                              setMemberCollections(prev => ({
+                                ...prev,
+                                [memberId]: updatedCollection
+                              }));
+                            }, 0);
+                          }
+                          
                           return (
                             <>
                               <div className="text-sm font-medium text-foreground mb-1">
@@ -4447,23 +4608,42 @@ export default function ContributionTrackingPage() {
                               </div>
                               <div>
                                 <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Paid Amount</label>
-                                <input
-                                  type="number"
-                                  value={memberCollection.lateFinePaid === 0 ? '' : memberCollection.lateFinePaid}
-                                  onFocus={(e) => {
-                                    // Clear field if value is 0 for better UX
-                                    if (Number(e.target.value) === 0) {
-                                      e.target.value = '';
+                                {showCompleted ? (
+                                  // Show actual paid amount for completed contributions  
+                                  <div className="px-2 py-1 text-xs bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded text-green-800 dark:text-green-300 font-medium">
+                                    ₹{formatCurrency(actualContributions[memberId]?.lateFinePaid || 0)}
+                                  </div>
+                                ) : (
+                                  // Show input field for pending contributions
+                                  <input
+                                    type="number"
+                                    value={(() => {
+                                      if (lateFineAmount === 0) return '';
+                                      const currentPaid = memberCollection.lateFinePaid || 0;
+                                      // Always show the constrained value
+                                      const constrainedValue = Math.min(currentPaid, lateFineAmount);
+                                      return constrainedValue === 0 ? '' : constrainedValue;
+                                    })()}
+                                    onFocus={(e) => {
+                                      // Clear field if value is 0 for better UX
+                                      if (Number(e.target.value) === 0 || lateFineAmount === 0) {
+                                        e.target.value = '';
+                                      }
+                                    }}
+                                    onWheel={(e) => {
+                                      // Prevent mouse wheel from changing number input values
+                                      e.currentTarget.blur();
+                                    }}
+                                    onChange={(e) => {
+                                      const inputValue = e.target.value;
+                                      const value = Math.max(0, Number(inputValue) || 0);
+                                      const maxAmount = lateFineAmount; // Use dynamic late fine amount
+                                      
+                                      // If no fine is due, don't allow any input
+                                      if (maxAmount === 0) {
+                                        console.warn('No late fine is due for this submission date');
+                                      return; // Exit early, don't update the value
                                     }
-                                  }}
-                                  onWheel={(e) => {
-                                    // Prevent mouse wheel from changing number input values
-                                    e.currentTarget.blur();
-                                  }}
-                                  onChange={(e) => {
-                                    const inputValue = e.target.value;
-                                    const value = Math.max(0, Number(inputValue) || 0);
-                                    const maxAmount = lateFineAmount; // Use dynamic late fine amount
                                     
                                     // Show warning if user tries to enter more than due amount
                                     if (value > maxAmount && maxAmount > 0) {
@@ -4510,20 +4690,29 @@ export default function ContributionTrackingPage() {
                                       [memberId]: updatedCollection
                                     }));
                                   }}
-                                  className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-red-500 dark:bg-gray-700 dark:text-gray-100"
+                                  className={`w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-red-500 dark:bg-gray-700 dark:text-gray-100 ${
+                                    lateFineAmount === 0 ? 'opacity-50 cursor-not-allowed' : ''
+                                  }`}
                                   min="0"
                                   max={lateFineAmount} // Use dynamic late fine amount
                                   step="0.01"
-                                  disabled={currentPeriod?.isClosed}
+                                  disabled={currentPeriod?.isClosed || lateFineAmount === 0}
+                                  placeholder={lateFineAmount === 0 ? 'No fine due' : '0'}
                                 />
-                                {lateFineAmount > 0 && (
+                                )}
+                                {!showCompleted && lateFineAmount > 0 && (
                                   <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                                     Max: ₹{formatCurrency(lateFineAmount)}
                                   </div>
                                 )}
-                                {lateFineAmount === 0 && memberCollection.lateFinePaid > 0 && (
+                                {!showCompleted && lateFineAmount === 0 && memberCollection.lateFinePaid > 0 && (
                                   <div className="text-xs text-amber-600 dark:text-amber-400 mt-1">
                                     No fine due - payment will be reset
+                                  </div>
+                                )}
+                                {!showCompleted && lateFineAmount > 0 && memberCollection.lateFinePaid > lateFineAmount && (
+                                  <div className="text-xs text-red-600 dark:text-red-400 mt-1">
+                                    ⚠️ Payment exceeds due amount - will be adjusted
                                   </div>
                                 )}
                               </div>
@@ -4539,23 +4728,30 @@ export default function ContributionTrackingPage() {
                         </div>
                         <div>
                           <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Paid Amount</label>
-                          <input
-                            type="number"
-                            value={memberCollection.loanInsurancePaid === 0 ? '' : memberCollection.loanInsurancePaid}
-                            onFocus={(e) => {
-                              // Clear field if value is 0 for better UX
-                              if (Number(e.target.value) === 0) {
-                                e.target.value = '';
-                              }
-                            }}
-                            onWheel={(e) => {
-                              // Prevent mouse wheel from changing number input values
-                              e.currentTarget.blur();
-                            }}
-                            onChange={(e) => {
-                              const inputValue = e.target.value;
-                              const value = Math.max(0, Number(inputValue) || 0);
-                              const maxAmount = contribution.loanInsuranceAmount || 0;
+                          {showCompleted ? (
+                            // Show actual paid amount for completed contributions
+                            <div className="px-2 py-1 text-xs bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded text-green-800 dark:text-green-300 font-medium">
+                              ₹{formatCurrency(actualContributions[memberId]?.loanInsurancePaid || 0)}
+                            </div>
+                          ) : (
+                            // Show input field for pending contributions
+                            <input
+                              type="number"
+                              value={memberCollection.loanInsurancePaid === 0 ? '' : memberCollection.loanInsurancePaid}
+                              onFocus={(e) => {
+                                // Clear field if value is 0 for better UX
+                                if (Number(e.target.value) === 0) {
+                                  e.target.value = '';
+                                }
+                              }}
+                              onWheel={(e) => {
+                                // Prevent mouse wheel from changing number input values
+                                e.currentTarget.blur();
+                              }}
+                              onChange={(e) => {
+                                const inputValue = e.target.value;
+                                const value = Math.max(0, Number(inputValue) || 0);
+                                const maxAmount = contribution.loanInsuranceAmount || 0;
                               
                               // Round up decimal values
                               const roundedValue = Math.ceil(value);
@@ -4602,6 +4798,7 @@ export default function ContributionTrackingPage() {
                             step="0.01"
                             disabled={currentPeriod?.isClosed}
                           />
+                          )}
                         </div>
                       </td>
                     )}
@@ -4612,23 +4809,30 @@ export default function ContributionTrackingPage() {
                         </div>
                         <div>
                           <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Paid Amount</label>
-                          <input
-                            type="number"
-                            value={memberCollection.groupSocialPaid === 0 ? '' : memberCollection.groupSocialPaid}
-                            onFocus={(e) => {
-                              // Clear field if value is 0 for better UX
-                              if (Number(e.target.value) === 0) {
-                                e.target.value = '';
-                              }
-                            }}
-                            onWheel={(e) => {
-                              // Prevent mouse wheel from changing number input values
-                              e.currentTarget.blur();
-                            }}
-                            onChange={(e) => {
-                              const inputValue = e.target.value;
-                              const value = Math.max(0, Number(inputValue) || 0);
-                              const maxAmount = contribution.groupSocialAmount || 0;
+                          {showCompleted ? (
+                            // Show actual paid amount for completed contributions
+                            <div className="px-2 py-1 text-xs bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded text-green-800 dark:text-green-300 font-medium">
+                              ₹{formatCurrency(actualContributions[memberId]?.groupSocialPaid || 0)}
+                            </div>
+                          ) : (
+                            // Show input field for pending contributions
+                            <input
+                              type="number"
+                              value={memberCollection.groupSocialPaid === 0 ? '' : memberCollection.groupSocialPaid}
+                              onFocus={(e) => {
+                                // Clear field if value is 0 for better UX
+                                if (Number(e.target.value) === 0) {
+                                  e.target.value = '';
+                                }
+                              }}
+                              onWheel={(e) => {
+                                // Prevent mouse wheel from changing number input values
+                                e.currentTarget.blur();
+                              }}
+                              onChange={(e) => {
+                                const inputValue = e.target.value;
+                                const value = Math.max(0, Number(inputValue) || 0);
+                                const maxAmount = contribution.groupSocialAmount || 0;
                               
                               // Round up decimal values
                               const roundedValue = Math.ceil(value);
@@ -4675,6 +4879,7 @@ export default function ContributionTrackingPage() {
                             step="0.01"
                             disabled={currentPeriod?.isClosed}
                           />
+                          )}
                         </div>
                       </td>
                     )}
@@ -4684,23 +4889,30 @@ export default function ContributionTrackingPage() {
                       </div>
                       <div>
                         <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Loan Paid</label>
-                        <input
-                          type="number"
-                          value={memberCollection.loanRepayment === 0 ? '' : memberCollection.loanRepayment}
-                          onFocus={(e) => {
-                            // Clear field if value is 0 for better UX
-                            if (Number(e.target.value) === 0) {
-                              e.target.value = '';
-                            }
-                          }}
-                          onWheel={(e) => {
-                            // Prevent mouse wheel from changing number input values
-                            e.currentTarget.blur();
-                          }}
-                          onChange={(e) => {
-                            const inputValue = e.target.value;
-                            const value = Math.max(0, Number(inputValue) || 0);
-                            const maxAmount = contribution.currentLoanBalance;
+                        {showCompleted ? (
+                          // Show actual loan repayment for completed contributions (loan repayment is separate from contribution status)
+                          <div className="px-2 py-1 text-xs bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded text-green-800 dark:text-green-300 font-medium">
+                            ₹{formatCurrency(memberCollection.loanRepayment || 0)}
+                          </div>
+                        ) : (
+                          // Show input field for pending contributions
+                          <input
+                            type="number"
+                            value={memberCollection.loanRepayment === 0 ? '' : memberCollection.loanRepayment}
+                            onFocus={(e) => {
+                              // Clear field if value is 0 for better UX
+                              if (Number(e.target.value) === 0) {
+                                e.target.value = '';
+                              }
+                            }}
+                            onWheel={(e) => {
+                              // Prevent mouse wheel from changing number input values
+                              e.currentTarget.blur();
+                            }}
+                            onChange={(e) => {
+                              const inputValue = e.target.value;
+                              const value = Math.max(0, Number(inputValue) || 0);
+                              const maxAmount = contribution.currentLoanBalance;
                             
                             // Calculate total dues to prevent overpayment (loan repayment is separate from other dues)
                             // For loan repayment, we only limit by the current loan balance
@@ -4733,6 +4945,7 @@ export default function ContributionTrackingPage() {
                           step="0.01"
                           disabled={currentPeriod?.isClosed}
                         />
+                        )}
                       </div>
                     </td>
                     <td className="px-3 py-4 whitespace-nowrap">
@@ -4760,28 +4973,35 @@ export default function ContributionTrackingPage() {
                     <td className="px-3 py-4 whitespace-nowrap">
                       <div className="text-sm">
                         <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">Date</label>
-                        <DatePicker
-                          selected={memberCollection.submissionDate || new Date()}
-                          onChange={(date) => {
-                            if (date) {
-                              // Calculate new late fine amount based on the new submission date
-                              const { daysLate, lateFineAmount } = calculateLateFineForSubmissionDate(group!, date, contribution.expectedContribution);
-                              
-                              // Get current paid amount for late fine
-                              const currentLateFinesPaid = memberCollection.lateFinePaid || 0;
-                              
-                              // If current paid amount exceeds new due amount, adjust it
-                              const adjustedLateFinesPaid = Math.min(currentLateFinesPaid, lateFineAmount);
-                              
-                              // Update member collection with new submission date and adjusted late fine paid
-                              const updatedCollection = {
-                                ...memberCollection,
-                                submissionDate: date,
-                                lateFinePaid: adjustedLateFinesPaid
-                              };
-                              
-                              // If late fine paid was adjusted, recalculate cash/bank allocation
-                              if (adjustedLateFinesPaid !== currentLateFinesPaid) {
+                        {showCompleted ? (
+                          // Show read-only date for completed contributions
+                          <div className="px-2 py-1 text-xs bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 rounded text-gray-800 dark:text-gray-200">
+                            {new Date(memberCollection.submissionDate || new Date()).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })}
+                          </div>
+                        ) : (
+                          // Show editable DatePicker for pending contributions
+                          <DatePicker
+                            selected={memberCollection.submissionDate || new Date()}
+                            onChange={(date) => {
+                              if (date) {
+                                // Calculate new late fine amount based on the new submission date
+                                const { daysLate, lateFineAmount } = calculateLateFineForSubmissionDate(group!, date, contribution.expectedContribution);
+                                
+                                // Get current paid amount for late fine
+                                const currentLateFinesPaid = memberCollection.lateFinePaid || 0;
+                                
+                                // If no fine is due, reset the paid amount to 0
+                                // If current paid amount exceeds new due amount, adjust it
+                                const adjustedLateFinesPaid = lateFineAmount === 0 ? 0 : Math.min(currentLateFinesPaid, lateFineAmount);
+                                
+                                // Update member collection with new submission date and adjusted late fine paid
+                                const updatedCollection = {
+                                  ...memberCollection,
+                                  submissionDate: date,
+                                  lateFinePaid: adjustedLateFinesPaid
+                                };
+                                
+                                // Recalculate cash/bank allocation when late fine paid changes
                                 const totalPayments = (updatedCollection.compulsoryContribution || 0) + 
                                                     (updatedCollection.interestPaid || 0) + 
                                                     (updatedCollection.lateFinePaid || 0) + 
@@ -4789,65 +5009,123 @@ export default function ContributionTrackingPage() {
                                                     (updatedCollection.loanInsurancePaid || 0) + 
                                                     (updatedCollection.loanRepayment || 0);
                                 
-                                // Update cash allocation proportionally
-                                if (totalPayments > 0 && (updatedCollection.cashAmount + updatedCollection.bankAmount) > 0) {
-                                  const currentTotal = updatedCollection.cashAmount + updatedCollection.bankAmount;
-                                  if (currentTotal !== totalPayments) {
-                                    const cashRatio = updatedCollection.cashAmount / currentTotal;
-                                    updatedCollection.cashAmount = Math.ceil(totalPayments * cashRatio);
-                                    updatedCollection.bankAmount = totalPayments - updatedCollection.cashAmount;
+                                // Update cash allocation proportionally if there are payments
+                                if (totalPayments > 0) {
+                                  if ((updatedCollection.cashAmount + updatedCollection.bankAmount) === 0) {
+                                    // Auto-allocate to cash if no allocation exists
+                                    updatedCollection.cashAmount = totalPayments;
+                                    updatedCollection.bankAmount = 0;
+                                  } else {
+                                    // Adjust existing allocation proportionally
+                                    const currentTotal = updatedCollection.cashAmount + updatedCollection.bankAmount;
+                                    if (currentTotal !== totalPayments) {
+                                      const cashRatio = updatedCollection.cashAmount / currentTotal;
+                                      updatedCollection.cashAmount = Math.ceil(totalPayments * cashRatio);
+                                      updatedCollection.bankAmount = totalPayments - updatedCollection.cashAmount;
+                                    }
+                                  }
+                                } else {
+                                  // If no payments, reset cash/bank amounts
+                                  updatedCollection.cashAmount = 0;
+                                  updatedCollection.bankAmount = 0;
+                                }
+                                
+                                // Update the collection state
+                                setMemberCollections(prev => ({
+                                  ...prev,
+                                  [memberId]: updatedCollection
+                                }));
+                                
+                                // Recalculate member contributions to update total expected amounts
+                                if (group) {
+                                  const updatedPaymentData = {
+                                    ...actualContributions,
+                                    [memberId]: {
+                                      ...actualContributions[memberId],
+                                      submissionDate: date.toISOString()
+                                    }
+                                  };
+                                  
+                                  // Recalculate contributions with new submission date
+                                  const recalculatedContributions = calculateMemberContributions(group, updatedPaymentData);
+                                  setMemberContributions(recalculatedContributions);
+                                  
+                                  // Update actual contributions with new submission date
+                                  setActualContributions(updatedPaymentData);
+                                }
+                                
+                                // Show notification if late fine paid was adjusted
+                                if (adjustedLateFinesPaid !== currentLateFinesPaid) {
+                                  if (lateFineAmount === 0) {
+                                    console.log(`Late fine payment reset to ₹0 - no fine due for this submission date`);
+                                  } else {
+                                    console.log(`Late fine payment adjusted from ₹${currentLateFinesPaid} to ₹${adjustedLateFinesPaid} due to submission date change`);
                                   }
                                 }
                               }
-                              
-                              setMemberCollections(prev => ({
-                                ...prev,
-                                [memberId]: updatedCollection
-                              }));
-                              
-                              // Show notification if late fine paid was adjusted
-                              if (adjustedLateFinesPaid !== currentLateFinesPaid) {
-                                console.log(`Late fine payment adjusted from ₹${currentLateFinesPaid} to ₹${adjustedLateFinesPaid} due to submission date change`);
-                                // You could add a toast notification here for better UX
-                              }
-                            }
-                          }}
-                          dateFormat="MMM dd, yyyy"
-                          className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-100"
-                          maxDate={new Date()}
-                          disabled={currentPeriod?.isClosed}
-                          placeholderText="Select date"
-                        />
+                            }}
+                            dateFormat="MMM dd, yyyy"
+                            className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-100"
+                            maxDate={new Date()}
+                            disabled={currentPeriod?.isClosed}
+                            placeholderText="Select date"
+                          />
+                        )}
                         <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                          Affects late fines
+                          {showCompleted ? 'Submission date' : 'Affects late fines'}
                         </div>
                       </div>
                     </td>
                     <td className="px-3 py-4 whitespace-nowrap text-sm sticky right-0 bg-white dark:bg-gray-800 z-10 border-l border-gray-200 dark:border-gray-700">
-                      <button
-                        onClick={async () => {
-                          const totalAmount = memberCollection.cashAmount + memberCollection.bankAmount;
-                          if (totalAmount > 0) {
-                            await submitMemberCollection(memberId);
-                          } else {
-                            alert('Please enter collection amount in cash or bank');
+                      {showCompleted ? (
+                        // Show "Mark Unpaid" button for completed contributions
+                        <button
+                          onClick={async () => {
+                            if (confirm(`Are you sure you want to mark ${contribution.memberName}'s contribution as unpaid? This will reset all payment amounts.`)) {
+                              await markContributionUnpaid(memberId);
+                            }
+                          }}
+                          disabled={savingPayment === contribution.memberId || currentPeriod?.isClosed}
+                          className={`w-full btn-secondary text-xs py-2 px-3 disabled:opacity-50 disabled:cursor-not-allowed ${
+                            currentPeriod?.isClosed 
+                              ? 'bg-gray-300 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-600 cursor-not-allowed' 
+                              : 'bg-orange-500 hover:bg-orange-600 text-white border-orange-500 hover:border-orange-600'
+                          }`}
+                        >
+                          {savingPayment === contribution.memberId 
+                            ? 'Processing...' 
+                            : currentPeriod?.isClosed 
+                              ? 'Period Closed' 
+                              : 'Mark Unpaid'
                           }
-                        }}
-                        disabled={savingPayment === contribution.memberId || currentPeriod?.isClosed || 
-                                (memberCollection.cashAmount + memberCollection.bankAmount) <= 0}
-                        className={`w-full btn-primary text-xs py-2 px-3 disabled:opacity-50 disabled:cursor-not-allowed ${
-                          currentPeriod?.isClosed 
-                            ? 'bg-gray-300 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-600 cursor-not-allowed' 
-                            : ''
-                        }`}
-                      >
-                        {savingPayment === contribution.memberId 
-                          ? 'Submitting...' 
-                          : currentPeriod?.isClosed 
-                            ? 'Period Closed' 
-                            : 'Submit'
-                        }
-                      </button>
+                        </button>
+                      ) : (
+                        // Show "Submit" button for pending contributions
+                        <button
+                          onClick={async () => {
+                            const totalAmount = memberCollection.cashAmount + memberCollection.bankAmount;
+                            if (totalAmount > 0) {
+                              await submitMemberCollection(memberId);
+                            } else {
+                              alert('Please enter collection amount in cash or bank');
+                            }
+                          }}
+                          disabled={savingPayment === contribution.memberId || currentPeriod?.isClosed || 
+                                  (memberCollection.cashAmount + memberCollection.bankAmount) <= 0}
+                          className={`w-full btn-primary text-xs py-2 px-3 disabled:opacity-50 disabled:cursor-not-allowed ${
+                            currentPeriod?.isClosed 
+                              ? 'bg-gray-300 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-600 cursor-not-allowed' 
+                              : ''
+                          }`}
+                        >
+                          {savingPayment === contribution.memberId 
+                            ? 'Submitting...' 
+                            : currentPeriod?.isClosed 
+                              ? 'Period Closed' 
+                              : 'Submit'
+                          }
+                        </button>
+                      )}
                     </td>
                   </tr>
                 );
