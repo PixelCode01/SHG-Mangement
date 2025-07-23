@@ -1736,8 +1736,7 @@ export default function ContributionTrackingPage() {
     
     // Helper function to safely format currency
     const formatCurrency = (amount: number | undefined | null): number => {
-      const numValue = Number(amount);
-      return isNaN(numValue) ? 0 : numValue;
+      return Math.ceil(Number(amount) || 0);
     };
 
     // Helper function to format period name
@@ -2116,8 +2115,8 @@ export default function ContributionTrackingPage() {
       const newCashInGroup = previousMonthBalance + totalCollected;
       const groupSocialFund = totalGroupSocial + (group.groupSocialBalance || 0);
       const loanInsuranceFund = totalLoanInsurance + (group.loanInsuranceBalance || 0);
-      const totalGroupStanding = newCashInGroup + totalPersonalLoanOutstanding - groupSocialFund - loanInsuranceFund;
-      const sharePerMember = group.memberCount > 0 ? totalGroupStanding / group.memberCount : 0;
+      const totalGroupStanding = Math.ceil(newCashInGroup + totalPersonalLoanOutstanding - groupSocialFund - loanInsuranceFund);
+      const sharePerMember = group.memberCount > 0 ? Math.ceil(totalGroupStanding / group.memberCount) : 0;
 
       // Find previous period's standing
       let previousMonthStanding = 0;
@@ -2128,11 +2127,11 @@ export default function ContributionTrackingPage() {
           .find(p => p.periodNumber < currentPeriod.periodNumber);
         
         if (previousPeriod) {
-          previousMonthStanding = previousPeriod.totalGroupStandingAtEndOfPeriod;
+          previousMonthStanding = Math.ceil(previousPeriod.totalGroupStandingAtEndOfPeriod);
         }
       }
 
-      const groupMonthlyGrowth = totalGroupStanding - previousMonthStanding;
+      const groupMonthlyGrowth = Math.ceil(totalGroupStanding - previousMonthStanding);
 
       cashSummaryData.push(
         ['', '', ''],
@@ -2317,10 +2316,9 @@ export default function ContributionTrackingPage() {
     
     // Helper function to safely format currency - robust approach
     const formatCurrency = (amount: number | undefined | null): string => {
-      const numValue = Number(amount);
-      if (isNaN(numValue)) return 'Rs. 0.00';
+      const numValue = Math.ceil(Number(amount) || 0);
       // Use 'Rs.' instead of '₹' symbol for better PDF compatibility
-      return `Rs. ${numValue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      return `Rs. ${numValue.toLocaleString('en-IN')}`;
     };
     
     // Helper function to get previous period standing
@@ -2588,8 +2586,8 @@ export default function ContributionTrackingPage() {
       const newCashInGroup = previousMonthBalance + totalCollected;
       const groupSocialFund = totalGroupSocial + (group.groupSocialBalance || 0);
       const loanInsuranceFund = totalLoanInsurance + (group.loanInsuranceBalance || 0);
-      const totalGroupStanding = newCashInGroup + totalPersonalLoanOutstanding - groupSocialFund - loanInsuranceFund;
-      const sharePerMember = group.memberCount > 0 ? totalGroupStanding / group.memberCount : 0;
+      const totalGroupStanding = Math.ceil(newCashInGroup + totalPersonalLoanOutstanding - groupSocialFund - loanInsuranceFund);
+      const sharePerMember = group.memberCount > 0 ? Math.ceil(totalGroupStanding / group.memberCount) : 0;
       const previousMonthStanding = getPreviousPeriodStanding();
       const { amount: groupMonthlyGrowth, percentage: growthPercentage } = calculateMonthlyGrowth(
         totalGroupStanding,
@@ -2611,16 +2609,14 @@ export default function ContributionTrackingPage() {
       cashSummaryData.push(
         ['= TOTAL GROUP STANDING', formatCurrency(totalGroupStanding), ''],
         ['', '', ''],
-        ['Share per Member', formatCurrency(sharePerMember), `(${formatCurrency(totalGroupStanding)} ÷ ${group.memberCount})`]
+          ['Share per Member', formatCurrency(sharePerMember), `(${formatCurrency(totalGroupStanding)} ÷ ${group.memberCount})`]
       );
       if (previousMonthStanding > 0) {
         cashSummaryData.push(
           ['', '', ''],
-          ['Group Monthly Growth', formatCurrency(groupMonthlyGrowth), `${formatCurrency(groupMonthlyGrowth)} (${growthPercentage.toFixed(2)}%)`]
+          ['Group Monthly Growth', formatCurrency(groupMonthlyGrowth), `${formatCurrency(groupMonthlyGrowth)} (${growthPercentage.toFixed(0)}%)`]
         );
-      }
-
-      autoTable(doc, {
+      }      autoTable(doc, {
         startY: summarySectionY,
         body: cashSummaryData,
         theme: 'grid',
@@ -3491,50 +3487,27 @@ export default function ContributionTrackingPage() {
         <div className="card bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-700/50">
           <div className="p-4">
             <h3 className="text-lg font-semibold text-green-700 dark:text-green-300">Total Expected</h3>
-            <p className="text-2xl font-bold text-green-600 dark:text-green-400">₹{totalExpected.toLocaleString()}</p>
+            <p className="text-2xl font-bold text-green-600 dark:text-green-400">₹{Math.ceil(totalExpected).toLocaleString()}</p>
           </div>
         </div>
         <div className="card bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-700/50">
           <div className="p-4">
             <h3 className="text-lg font-semibold text-blue-700 dark:text-blue-300">Total Collected</h3>
-            <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">₹{(() => {
-              // Calculate dynamic total collected including current inputs
-              const actualCollected = totalCollected;
-              const inputCollected = Object.values(memberCollections).reduce((sum, collection) => {
-                return sum + (collection.cashAmount || 0) + (collection.bankAmount || 0);
-              }, 0);
-              return (actualCollected + inputCollected).toLocaleString();
-            })()}</p>
+            <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">₹{Math.ceil(totalCollected).toLocaleString()}</p>
           </div>
         </div>
         {lateFinesEnabled && (
           <div className="card bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-700/50">
             <div className="p-4">
               <h3 className="text-lg font-semibold text-red-700 dark:text-red-300">Total Late Fines</h3>
-              <p className="text-2xl font-bold text-red-600 dark:text-red-400">₹{(() => {
-                // Calculate dynamic late fines including current inputs
-                const actualFines = totalLateFines;
-                const inputFines = Object.values(memberCollections).reduce((sum, collection) => {
-                  return sum + (collection.lateFinePaid || 0);
-                }, 0);
-                return (actualFines + inputFines).toLocaleString();
-              })()}</p>
+              <p className="text-2xl font-bold text-red-600 dark:text-red-400">₹{Math.ceil(totalLateFines).toLocaleString()}</p>
             </div>
           </div>
         )}
         <div className="card bg-orange-50 dark:bg-orange-900/20 border-orange-200 dark:border-orange-700/50">
           <div className="p-4">
             <h3 className="text-lg font-semibold text-orange-700 dark:text-orange-300">Remaining</h3>
-            <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">₹{(() => {
-              // Calculate dynamic remaining amount
-              const actualCollected = totalCollected;
-              const inputCollected = Object.values(memberCollections).reduce((sum, collection) => {
-                return sum + (collection.cashAmount || 0) + (collection.bankAmount || 0);
-              }, 0);
-              const totalDynamicCollected = actualCollected + inputCollected;
-              const dynamicRemaining = Math.max(0, totalExpected - totalDynamicCollected);
-              return dynamicRemaining.toLocaleString();
-            })()}</p>
+            <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">₹{Math.ceil(totalRemaining).toLocaleString()}</p>
           </div>
         </div>
       </div>
@@ -3604,7 +3577,7 @@ export default function ContributionTrackingPage() {
             const loanInsuranceFund = loanInsurance + (group.loanInsuranceBalance || 0);
 
             // Total Group Standing = New Cash in Group + Personal Loan Outstanding − Group Social Fund − Loan Insurance Fund
-            const totalGroupStanding = newCashInGroup + personalLoanOutstanding - groupSocialFund - loanInsuranceFund;
+            const totalGroupStanding = Math.ceil(newCashInGroup + personalLoanOutstanding - groupSocialFund - loanInsuranceFund);
 
             const sharePerMember = group.memberCount > 0 ? Math.ceil(totalGroupStanding / group.memberCount) : 0;
 
