@@ -2235,20 +2235,20 @@ export default function ContributionTrackingPage() {
       // Final step: Comprehensive text visibility fix
       // Set generous column widths to prevent any text cutoff
       worksheet.columns = [
-        { width: 15, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // SL
-        { width: 80, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Description/Name - extra wide
-        { width: 40, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Amount
-        { width: 40, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Additional columns
-        { width: 40, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Loan Interest
-        { width: 35, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Late Fine
-        { width: 40, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Loan Insurance
-        { width: 35, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Group Social
-        { width: 40, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Total Expected
-        { width: 30, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Status
-        { width: 40, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Extra columns
-        { width: 40, style: { alignment: { wrapText: true, vertical: 'middle' } } },
-        { width: 40, style: { alignment: { wrapText: true, vertical: 'middle' } } },
-        { width: 80, style: { alignment: { wrapText: true, vertical: 'middle' } } }   // Description column - extra wide
+        { width: 10, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // SL
+        { width: 50, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Description/Name - extra wide
+        { width: 25, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Amount
+        { width: 25, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Additional columns
+        { width: 25, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Loan Interest
+        { width: 25, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Late Fine
+        { width: 25, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Loan Insurance
+        { width: 25, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Group Social
+        { width: 25, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Total Expected
+        { width: 20, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Status
+        { width: 25, style: { alignment: { wrapText: true, vertical: 'middle' } } },  // Extra columns
+        { width: 25, style: { alignment: { wrapText: true, vertical: 'middle' } } },
+        { width: 25, style: { alignment: { wrapText: true, vertical: 'middle' } } },
+        { width: 50, style: { alignment: { wrapText: true, vertical: 'middle' } } }   // Description column - extra wide
       ];
       
       // Ensure all cells have proper text wrapping and alignment
@@ -2358,7 +2358,7 @@ export default function ContributionTrackingPage() {
       const jsPDF = (await import('jspdf')).default;
       const autoTable = (await import('jspdf-autotable')).default;
 
-      const doc = new jsPDF();
+      const doc = new jsPDF({ orientation: 'landscape' });
       const pageWidth = doc.internal.pageSize.getWidth();
 
       // === HEADER SECTION ===
@@ -2431,76 +2431,44 @@ export default function ContributionTrackingPage() {
       doc.text('Member Contributions', 14, lastY);
       lastY += 5;
 
-      const tableHeaders = ['SL', 'Member Name', 'Contribution'];
-      const columnWidths = [8, 32, 20];
-      
-      if (memberContributions.some(m => (m.expectedInterest || 0) > 0)) {
-        tableHeaders.push('Interest');
-        columnWidths.push(15);
-      }
-      if (memberContributions.some(m => (m.lateFineAmount || 0) > 0)) {
-        tableHeaders.push('Fine');
-        columnWidths.push(12);
-      }
-      if (group.loanInsuranceEnabled && memberContributions.some(m => (m.loanInsuranceAmount || 0) > 0)) {
-        tableHeaders.push('LI');
-        columnWidths.push(10);
-      }
-      if (group.groupSocialEnabled && memberContributions.some(m => (m.groupSocialAmount || 0) > 0)) {
-        tableHeaders.push('GS');
-        columnWidths.push(10);
-      }
-      tableHeaders.push('Total', 'Paid', 'Bal', 'Loan', 'Status');
-      columnWidths.push(15, 15, 15, 15, 10);
+      const tableHeaders = ['SL', 'Member Name', 'Contrib', 'Interest', 'Fine', 'LI', 'GS', 'Total Exp', 'Paid', 'Remain', 'Loan', 'Status', 'Late Days', 'Due Date'];
+      const columnWidths = [8, 45, 20, 20, 18, 18, 18, 22, 22, 22, 22, 18, 18, 22];
 
       const tableData = memberContributions.map((member, index) => {
-        const row = [
+        return [
           (index + 1).toString(),
           member.memberName || '',
-          formatCurrency(member.expectedContribution)
-        ];
-        if (memberContributions.some(m => (m.expectedInterest || 0) > 0)) {
-          row.push(formatCurrency(member.expectedInterest));
-        }
-        if (memberContributions.some(m => (m.lateFineAmount || 0) > 0)) {
-          row.push(formatCurrency(member.lateFineAmount || 0));
-        }
-        if (group.loanInsuranceEnabled && memberContributions.some(m => (m.loanInsuranceAmount || 0) > 0)) {
-          row.push(formatCurrency(member.loanInsuranceAmount || 0));
-        }
-        if (group.groupSocialEnabled && memberContributions.some(m => (m.groupSocialAmount || 0) > 0)) {
-          row.push(formatCurrency(member.groupSocialAmount || 0));
-        }
-        row.push(
+          formatCurrency(member.expectedContribution),
+          formatCurrency(member.expectedInterest),
+          formatCurrency(member.lateFineAmount || 0),
+          formatCurrency(member.loanInsuranceAmount || 0),
+          formatCurrency(member.groupSocialAmount || 0),
           formatCurrency(member.totalExpected),
           formatCurrency(member.paidAmount || 0),
           formatCurrency(member.remainingAmount || 0),
           formatCurrency(member.currentLoanBalance || 0),
-          member.status === 'PAID' ? '✓' : member.status === 'PARTIAL' ? '~' : '✗'
-        );
-        return row;
+          member.status,
+          (member.daysLate || 0).toString(),
+          new Date(member.dueDate).toLocaleDateString(),
+        ];
       });
 
-      const totalsRow = ['', 'TOTAL', formatCurrency(totalCompulsoryContribution)];
-      if (memberContributions.some(m => (m.expectedInterest || 0) > 0)) {
-        totalsRow.push(formatCurrency(totalInterestPaid));
-      }
-      if (memberContributions.some(m => (m.lateFineAmount || 0) > 0)) {
-        totalsRow.push(formatCurrency(totalLateFines));
-      }
-      if (group.loanInsuranceEnabled && memberContributions.some(m => (m.loanInsuranceAmount || 0) > 0)) {
-        totalsRow.push(formatCurrency(totalLoanInsurance));
-      }
-      if (group.groupSocialEnabled && memberContributions.some(m => (m.groupSocialAmount || 0) > 0)) {
-        totalsRow.push(formatCurrency(totalGroupSocial));
-      }
-      totalsRow.push(
+      const totalsRow = [
+        '', 
+        'TOTAL',
+        formatCurrency(totalCompulsoryContribution),
+        formatCurrency(totalInterestPaid),
+        formatCurrency(totalLateFines),
+        formatCurrency(totalLoanInsurance),
+        formatCurrency(totalGroupSocial),
         formatCurrency(totalExpected),
         formatCurrency(totalCollected),
         formatCurrency(totalExpected - totalCollected),
         formatCurrency(totalPersonalLoanOutstanding),
-        `${memberContributions.filter(c => c.status === 'PAID').length}/${memberContributions.length}`
-      );
+        `${memberContributions.filter(c => c.status === 'PAID').length}/${memberContributions.length}`,
+        '', // Days late total - empty
+        '' // Due date total - empty
+      ];
 
       autoTable(doc, {
         startY: lastY,
@@ -2510,9 +2478,9 @@ export default function ContributionTrackingPage() {
           fillColor: [72, 49, 212],
           textColor: [255, 255, 255],
           fontStyle: 'bold',
-          fontSize: 9
+          fontSize: 8
         },
-        bodyStyles: { fontSize: 8, cellPadding: 2 },
+        bodyStyles: { fontSize: 7, cellPadding: 1.5 },
         columnStyles: Object.fromEntries(
           columnWidths.map((width, index) => [index, { cellWidth: width }])
         ),
@@ -2522,12 +2490,12 @@ export default function ContributionTrackingPage() {
             data.cell.styles.fillColor = [240, 240, 240];
             data.cell.styles.fontStyle = 'bold';
           }
-          const statusColIndex = tableHeaders.length - 1;
+          const statusColIndex = tableHeaders.indexOf('Status');
           if (data.column.index === statusColIndex && data.section === 'body') {
             const status = data.cell.raw;
-            if (status === '✓') data.cell.styles.textColor = [46, 125, 50];
-            else if (status === '~') data.cell.styles.textColor = [198, 130, 0];
-            else if (status === '✗') data.cell.styles.textColor = [198, 40, 40];
+            if (status === 'PAID') data.cell.styles.textColor = [46, 125, 50];
+            else if (status === 'PARTIAL') data.cell.styles.textColor = [198, 130, 0];
+            else if (status === 'OVERDUE' || status === 'PENDING') data.cell.styles.textColor = [198, 40, 40];
           }
         }
       });
@@ -2535,7 +2503,7 @@ export default function ContributionTrackingPage() {
 
       // === GROUP CASH SUMMARY SECTION ===
       let summarySectionY = lastY + 15;
-      if (summarySectionY > 220) {
+      if (summarySectionY > 160) { // Adjusted for landscape
         doc.addPage();
         summarySectionY = 20;
       }
