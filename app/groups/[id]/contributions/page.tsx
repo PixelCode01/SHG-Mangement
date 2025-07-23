@@ -5,19 +5,20 @@ import { useParams } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { devConsole, rateLogger } from '../../../utils/performance';
 import Link from 'next/link';
-import dynamic from 'next/dynamic';
-// Import DatePicker dynamically to avoid SSR issues
-const DatePicker = dynamic(() => import('react-datepicker'), { ssr: false });
+import DatePicker from 'react-datepicker';
 import 'react-datepicker/dist/react-datepicker.css';
 import { calculatePeriodInterestFromDecimal } from '@/app/lib/interest-utils';
 import ReportModal from '@/app/components/ReportModal';
 import { roundToTwoDecimals, formatCurrency } from '@/app/lib/currency-utils';
-import { getPreviousPeriodStanding, calculateMonthlyGrowth } from '@/app/lib/report-utils';
+import { calculateMonthlyGrowth } from '@/app/lib/report-utils';
 
 // Type declaration for jspdf-autotable
 declare module 'jspdf' {
   interface jsPDF {
-    // ...existing code...
+    autoTable: (options: any) => jsPDF;
+    lastAutoTable: {
+      finalY: number;
+    };
   }
 }
 
@@ -33,6 +34,7 @@ interface GroupMember {
   currentLoanBalance?: number;
   initialInterest?: number;
   familyMembersCount?: number;
+  familySize?: number;
 }
 
 interface GroupData {
@@ -119,6 +121,7 @@ interface ContributionRecord {
   status: 'PENDING' | 'PARTIAL' | 'PAID' | 'LATE';
   dueDate: string;
   paidDate?: string;
+  submissionDate?: string;
   daysLate: number;
   lateFineAmount: number;
   
@@ -135,7 +138,7 @@ interface ContributionRecord {
 interface MemberContributionStatus {
   memberId: string;
   memberName: string;
-  familySize: number; // Added family size
+  familySize: number; 
   expectedContribution: number;
   expectedInterest: number;
   currentLoanBalance: number;
@@ -147,10 +150,35 @@ interface MemberContributionStatus {
   remainingAmount: number;
   status: 'PENDING' | 'PAID' | 'PARTIAL' | 'OVERDUE';
   lastPaymentDate?: string;
-  // New fields for loan insurance and group social
   loanInsuranceAmount?: number;
   groupSocialAmount?: number;
 }
+
+interface MemberCollectionState {
+  cashAmount: number;
+  bankAmount: number;
+  compulsoryContribution: number;
+  interestPaid: number;
+  loanRepayment: number;
+  lateFinePaid: number;
+  loanInsurancePaid: number;
+  groupSocialPaid: number;
+  remainingLoan: number;
+  submissionDate: Date;
+}
+
+const createInitialCollectionState = (contribution: MemberContributionStatus): MemberCollectionState => ({
+  cashAmount: 0,
+  bankAmount: 0,
+  compulsoryContribution: 0,
+  interestPaid: 0,
+  loanRepayment: 0,
+  lateFinePaid: 0,
+  loanInsurancePaid: 0,
+  groupSocialPaid: 0,
+  remainingLoan: contribution.currentLoanBalance || 0,
+  submissionDate: new Date(),
+});
 
 export default function ContributionTrackingPage() {
   const params = useParams();
@@ -192,20 +220,6 @@ export default function ContributionTrackingPage() {
     fundBalanceLI?: number | null;
     fundBalanceGS?: number | null;
   } | null>(null);
-  const [allPeriods, setAllPeriods] = useState<Array<{
-    id: string;
-    startDate: string;
-    endDate?: string;
-    isClosed: boolean;
-    periodNumber: number;
-    periodType: string;
-  }>>([]);
-  const [showFilters, setShowFilters] = useState(false);
-  const [appliedFilters, setAppliedFilters] = useState({
-    status: '' as 'ALL' | 'PENDING' | 'PAID' | 'PARTIAL' | 'OVERDUE' | '',
-    member: ''
-  });
-  const [selectedMemberForPayment, setSelectedMemberForPayment] = useState<string | null>(null);
   const [showReportModal, setShowReportModal] = useState(false);
   
   // Function to get formatted period name
@@ -239,104 +253,6 @@ export default function ContributionTrackingPage() {
   const [showInterestRateModal, setShowInterestRateModal] = useState(false);
   const [newInterestRate, setNewInterestRate] = useState('');
   const [paymentAmount, setPaymentAmount] = useState<string>('');
-  const [currentSortConfig, setCurrentSortConfig] = useState<{ 
-    key: keyof MemberContributionStatus | null; 
-    direction: 'asc' | 'desc' 
-  }>({ 
-    key: null, 
-    direction: 'asc' 
-  });
-
-  // PDF Export Handler with dynamic import to avoid SSR issues
-  const handleDownloadPDF = useCallback(async () => {
-    if (!group || !currentPeriod) return;
-
-    try {
-      // Dynamic import to avoid SSR issues
-      const jsPDF = (await import('jspdf')).default;
-      const autoTable = (await import('jspdf-autotable')).default;
-
-      const doc = new jsPDF();
-
-      // Header
-      doc.setFontSize(16);
-      doc.text(group.name || 'Group Name', 14, 16);
-      doc.setFontSize(10);
-      doc.text(`Est. ${group.dateOfStarting ? new Date(group.dateOfStarting).getFullYear() : ''}`, 14, 22);
-      doc.text(`Period: ${currentPeriod.startDate ? new Date(currentPeriod.startDate).toLocaleString('default', { month: 'long', year: 'numeric' }) : ''}`,
-        14, 28);
-
-      // Financial Summary
-      const cashInHand = Math.ceil(group.cashInHand || 0);
-      const cashInBank = Math.ceil(group.balanceInBank || 0);
-      const totalLoanAssets = Math.ceil(group.members.reduce((sum, m) => sum + (m.currentLoanBalance || 0), 0));
-      const groupStanding = cashInHand + cashInBank + totalLoanAssets;
-      const memberCount = group.members.length;
-      const sharePerMember = memberCount > 0 ? Math.ceil(groupStanding / memberCount) : 0;
-
-      doc.setFontSize(12);
-      doc.text('Financial Summary', 14, 38);
-      autoTable(doc, {
-        startY: 42,
-        head: [['Cash in Hand', 'Cash in Bank', 'Total Loan Assets', 'Group Standing', 'Members', 'Share/Member']],
-        body: [[
-          cashInHand.toLocaleString(),
-          cashInBank.toLocaleString(),
-          totalLoanAssets.toLocaleString(),
-          groupStanding.toLocaleString(),
-          memberCount,
-          sharePerMember.toLocaleString()
-        ]],
-        theme: 'grid',
-        styles: { fontSize: 10 },
-      });
-
-      // Fund Breakdown (GS, FD, LI, EL) - use available fields only
-      // For demo, only GS and LI if available
-      let fundRows = [];
-      if (group.groupSocialEnabled) {
-        fundRows.push(['Group Social (GS)', Math.ceil((group.groupSocialAmountPerFamilyMember || 0) * memberCount).toLocaleString()]);
-      }
-      if (group.loanInsuranceEnabled) {
-        fundRows.push(['Loan Insurance (LI)', Math.ceil((group.loanInsurancePercent || 0) * totalLoanAssets / 100).toLocaleString()]);
-      }
-      if (fundRows.length > 0) {
-        doc.text('Fund Breakdown', 14, doc.lastAutoTable ? doc.lastAutoTable.finalY + 10 : 60);
-        autoTable(doc, {
-          startY: doc.lastAutoTable ? doc.lastAutoTable.finalY + 14 : 64,
-          head: [['Fund', 'Amount']],
-          body: fundRows,
-          theme: 'grid',
-          styles: { fontSize: 10 },
-        });
-      }
-
-      // Member Table
-      doc.text('Member Contributions', 14, doc.lastAutoTable ? doc.lastAutoTable.finalY + 10 : 90);
-      const memberRows = group.members.map((m) => [
-        m.name,
-        Math.ceil(m.currentShareAmount || 0).toLocaleString(),
-        Math.ceil(m.currentLoanBalance || 0).toLocaleString(),
-        m.familyMembersCount || '',
-      ]);
-      autoTable(doc, {
-        startY: doc.lastAutoTable ? doc.lastAutoTable.finalY + 14 : 94,
-        head: [['Name', 'Share Amount', 'Loan Balance', 'Family Size']],
-        body: memberRows,
-        theme: 'grid',
-        styles: { fontSize: 9 },
-      });
-
-      // Standing Calculation Formula
-      doc.setFontSize(10);
-      doc.text('Group Standing = Cash in Hand + Cash in Bank + Total Loan Assets', 14, doc.lastAutoTable ? doc.lastAutoTable.finalY + 12 : 120);
-
-      doc.save(`${group.name || 'group'}-statement.pdf`);
-    } catch (error) {
-      console.error('Error generating PDF:', error);
-      alert('Error generating PDF report. Please try again.');
-    }
-  }, [group, currentPeriod]);
 
   // Helper function to get ordinal suffix for numbers (1st, 2nd, 3rd, etc.)
   const getOrdinalSuffix = (num: number): string => {
@@ -376,7 +292,7 @@ export default function ContributionTrackingPage() {
   // Payment modal state
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showClosePeriodModal, setShowClosePeriodModal] = useState(false);
-  const [selectedMember, setSelectedMember] = useState<{
+  const [selectedMember, ] = useState<{
     id: string;
     name: string;
     expectedContribution: number;
@@ -384,8 +300,9 @@ export default function ContributionTrackingPage() {
     remainingAmount: number;
     lateFineAmount?: number;
     daysLate?: number;
+    groupSocialAmount?: number;
+    loanInsuranceAmount?: number;
   } | null>(null);
-  const [submissionDate, setSubmissionDate] = useState<Date>(new Date()); // New state for submission date
   const [contributionAllocation, setContributionAllocation] = useState({
     cashInHand: 0,
     cashInBank: 0
@@ -396,18 +313,7 @@ export default function ContributionTrackingPage() {
   });
 
   // New state for individual member collection inputs
-  const [memberCollections, setMemberCollections] = useState<Record<string, {
-    cashAmount: number;
-    bankAmount: number;
-    compulsoryContribution: number;
-    interestPaid: number;
-    loanRepayment: number;
-    lateFinePaid: number;
-    loanInsurancePaid: number;
-    groupSocialPaid: number;
-    remainingLoan: number;
-    submissionDate: Date; // Added submission date for each member
-  }>>({});
+  const [memberCollections, setMemberCollections] = useState<Record<string, MemberCollectionState>>({});
 
   useEffect(() => {
     fetchGroupData();
@@ -582,29 +488,18 @@ export default function ContributionTrackingPage() {
       setMemberContributions(calculatedContributions);
 
       // Initialize member collections state for new members (only if they don't exist)
-      const initialCollections: Record<string, any> = {};
+      const initialCollections: Record<string, MemberCollectionState> = {};
       let hasNewMembers = false;
       
-      calculatedContributions.forEach((contribution: any) => {
+      calculatedContributions.forEach((contribution) => {
         if (!memberCollections[contribution.memberId]) {
           hasNewMembers = true;
-          initialCollections[contribution.memberId] = {
-            cashAmount: 0,
-            bankAmount: 0,
-            compulsoryContribution: 0,
-            interestPaid: 0,
-            loanRepayment: 0,
-            lateFinePaid: 0,
-            loanInsurancePaid: 0,
-            groupSocialPaid: 0,
-            remainingLoan: contribution.currentLoanBalance || 0,
-            submissionDate: new Date() // Add submission date with default value
-          };
+          initialCollections[contribution.memberId] = createInitialCollectionState(contribution);
         }
       });
 
       if (hasNewMembers && Object.keys(initialCollections).length > 0) {
-        setMemberCollections((prev: any) => ({ ...prev, ...initialCollections }));
+        setMemberCollections((prev) => ({ ...prev, ...initialCollections }));
       }
     }
   }, [group, currentPeriod, actualContributions]); // Remove memberCollections to prevent infinite loop
@@ -789,12 +684,7 @@ export default function ContributionTrackingPage() {
             dueDate = new Date(periodYear, periodMonth + 1, 0); // Last day of period month
           }
           
-          if (process.env.NODE_ENV === 'development') {
-            console.log(`🔍 [DUE DATE FIX] Using active period month for due date calculation:`);
-            console.log(`   Active Period: ${periodDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`);
-            console.log(`   Target Day: ${targetDay}`);
-            console.log(`   Calculated Due Date: ${dueDate.toDateString()}`);
-          }
+          // Debug logging removed to prevent console spam
           return dueDate;
         }
         
@@ -1158,10 +1048,54 @@ export default function ContributionTrackingPage() {
         compulsoryContributionPaid: collection.compulsoryContribution,
         loanInterestPaid: collection.interestPaid,
         lateFinePaid: collection.lateFinePaid || 0,
-        groupSocialPaid: collection.groupSocialPaid || 0,  // � FIXED: was collection.groupSocial
-        loanInsurancePaid: collection.loanInsurancePaid || 0,  // � FIXED: was collection.loanInsurance
+        groupSocialPaid: collection.groupSocialPaid || 0,
+        loanInsurancePaid: collection.loanInsurancePaid || 0,
         totalPaid: calculatedTotal,
-        status: 'PAID'
+        status: 'PAID',
+        submissionDate: collection.submissionDate.toISOString(),
+        cashAllocation: (() => {
+          const cashRatio = collection.cashAmount / Math.max(1, collection.cashAmount + collection.bankAmount);
+          const bankRatio = collection.bankAmount / Math.max(1, collection.cashAmount + collection.bankAmount);
+          
+          const allocation = {
+            contributionToCashInHand: Math.ceil((collection.compulsoryContribution || 0) * cashRatio),
+            contributionToCashInBank: Math.ceil((collection.compulsoryContribution || 0) * bankRatio),
+            interestToCashInHand: Math.ceil((collection.interestPaid || 0) * cashRatio),
+            interestToCashInBank: Math.ceil((collection.interestPaid || 0) * bankRatio),
+            lateFineToHand: Math.ceil((collection.lateFinePaid || 0) * cashRatio),
+            lateFineToBank: Math.ceil((collection.lateFinePaid || 0) * bankRatio),
+            groupSocialToHand: Math.ceil((collection.groupSocialPaid || 0) * cashRatio),
+            groupSocialToBank: Math.ceil((collection.groupSocialPaid || 0) * bankRatio),
+            loanInsuranceToHand: Math.ceil((collection.loanInsurancePaid || 0) * cashRatio),
+            loanInsuranceToBank: Math.ceil((collection.loanInsurancePaid || 0) * bankRatio)
+          };
+          
+          // 🔍 LOG: Cash allocation calculation details
+          if (process.env.NODE_ENV === 'development') {
+            console.log('💰 [CASH ALLOCATION SAVE DEBUG]', {
+              memberId,
+              memberName: group?.members.find(m => m.id === memberId)?.name,
+              userInput: {
+                cashAmount: collection.cashAmount,
+                bankAmount: collection.bankAmount,
+                total: collection.cashAmount + collection.bankAmount
+              },
+              ratios: { cashRatio, bankRatio },
+              payments: {
+                compulsoryContribution: collection.compulsoryContribution || 0,
+                interestPaid: collection.interestPaid || 0,
+                lateFinePaid: collection.lateFinePaid || 0,  
+                groupSocialPaid: collection.groupSocialPaid || 0,
+                loanInsurancePaid: collection.loanInsurancePaid || 0
+              },
+              calculatedAllocation: allocation,
+              totalCashAllocated: allocation.contributionToCashInHand + allocation.interestToCashInHand + allocation.lateFineToHand + allocation.groupSocialToHand + allocation.loanInsuranceToHand,
+              totalBankAllocated: allocation.contributionToCashInBank + allocation.interestToCashInBank + allocation.lateFineToBank + allocation.groupSocialToBank + allocation.loanInsuranceToBank
+            });
+          }
+          
+          return allocation;
+        })()
       };
 
       console.log('🔍 [SUBMIT DEBUG] API payload being sent:', apiPayload);
@@ -1194,9 +1128,9 @@ export default function ContributionTrackingPage() {
       if (process.env.NODE_ENV === 'development') {
         console.log('🔄 [SUBMISSION] Updating local state with:', updatedContribution);
       }
-      setActualContributions((prev: any) => ({
+      setActualContributions((prev) => ({
         ...prev,
-        [memberId]: updatedContribution
+        [memberId]: updatedContribution as ContributionRecord,
       }));
 
       // Handle loan repayment if any
@@ -1225,7 +1159,7 @@ export default function ContributionTrackingPage() {
       }
       
       // Clear the member collection data after successful submission and refresh
-      setMemberCollections((prev: any) => {
+      setMemberCollections((prev) => {
         const newState = { ...prev };
         delete newState[memberId];
         if (process.env.NODE_ENV === 'development') {
@@ -1321,7 +1255,7 @@ export default function ContributionTrackingPage() {
           memberContribution = newContribution;
           setActualContributions(prev => ({
             ...prev,
-            [memberId]: newContribution
+            [memberId]: newContribution as ContributionRecord
           }));
           
           console.log('Successfully created contribution record for member:', memberId);
@@ -1420,7 +1354,7 @@ export default function ContributionTrackingPage() {
       // Update local state with the API response
       setActualContributions(prev => ({
         ...prev,
-        [memberId]: updatedContribution
+        [memberId]: updatedContribution as ContributionRecord
       }));
 
       // Recalculate member contributions with updated payment data
@@ -1487,9 +1421,9 @@ export default function ContributionTrackingPage() {
       const { contribution: updatedContribution } = await response.json();
 
       // Update local state
-      setActualContributions((prev: any) => ({
+      setActualContributions((prev) => ({
         ...prev,
-        [memberId]: updatedContribution
+        [memberId]: updatedContribution as ContributionRecord,
       }));
 
       // Reset the member collection state
@@ -1512,8 +1446,6 @@ export default function ContributionTrackingPage() {
       // Refresh the data
       await Promise.all([
         fetchGroupData(),
-        fetchCurrentPeriod(),
-        fetchContributions()
       ]);
 
       alert('Contribution marked as unpaid successfully!');
@@ -1538,9 +1470,6 @@ export default function ContributionTrackingPage() {
     let remainingPayment = paymentAmt;
     let contributionPayment = 0;
     let interestPayment = 0;
-    let lateFinePayment = 0;
-    let groupSocialPayment = 0;
-    let loanInsurancePayment = 0;
     
     // First allocate to compulsory contribution
     if (remainingPayment > 0 && selectedMember.expectedContribution > 0) {
@@ -1555,20 +1484,20 @@ export default function ContributionTrackingPage() {
     }
     
     // Then allocate to late fines
-    if (remainingPayment > 0 && selectedMember.lateFineAmount > 0) {
-      lateFinePayment = Math.min(remainingPayment, selectedMember.lateFineAmount);
+    if (remainingPayment > 0 && (selectedMember?.lateFineAmount || 0) > 0) {
+      const lateFinePayment = Math.min(remainingPayment, selectedMember.lateFineAmount || 0);
       remainingPayment -= lateFinePayment;
     }
     
     // Then allocate to group social
-    if (remainingPayment > 0 && group?.groupSocialEnabled && selectedMember.groupSocialAmount > 0) {
-      groupSocialPayment = Math.min(remainingPayment, selectedMember.groupSocialAmount);
+    if (remainingPayment > 0 && group?.groupSocialEnabled && (selectedMember.groupSocialAmount || 0) > 0) {
+      const groupSocialPayment = Math.min(remainingPayment, selectedMember.groupSocialAmount || 0);
       remainingPayment -= groupSocialPayment;
     }
     
     // Then allocate to loan insurance
-    if (remainingPayment > 0 && group?.loanInsuranceEnabled && selectedMember.loanInsuranceAmount > 0) {
-      loanInsurancePayment = Math.min(remainingPayment, selectedMember.loanInsuranceAmount);
+    if (remainingPayment > 0 && group?.loanInsuranceEnabled && (selectedMember.loanInsuranceAmount || 0) > 0) {
+      const loanInsurancePayment = Math.min(remainingPayment, selectedMember.loanInsuranceAmount || 0);
       remainingPayment -= loanInsurancePayment;
     }
     
@@ -2190,7 +2119,7 @@ export default function ContributionTrackingPage() {
       const groupSocialFund = totalGroupSocial + (group.groupSocialBalance || 0);
       const loanInsuranceFund = totalLoanInsurance + (group.loanInsuranceBalance || 0);
       const totalGroupStanding = Math.ceil(newCashInGroup + totalPersonalLoanOutstanding - groupSocialFund - loanInsuranceFund);
-      const sharePerMember = group.memberCount > 0 ? Math.ceil(totalGroupStanding / group.memberCount) : 0;
+      // const sharePerMember = group.memberCount > 0 ? Math.ceil(totalGroupStanding / group.memberCount) : 0;
 
       // Find previous period's standing
       let previousMonthStanding = 0;
@@ -2205,37 +2134,11 @@ export default function ContributionTrackingPage() {
         }
       }
 
-      const groupMonthlyGrowth = Math.ceil(totalGroupStanding - previousMonthStanding);
-
-      cashSummaryData.push(
-        ['', '', ''],
-        ['TOTAL GROUP STANDING', '', ''],
-        ['New Cash in Group', newCashInGroup, ''],
-        ['+ Personal Loan Outstanding', totalPersonalLoanOutstanding, ''],
-      );
-
-      if (groupSocialFund > 0) {
-        cashSummaryData.push(['- Group Social Fund', groupSocialFund, '']);
-      }
-      
-      if (loanInsuranceFund > 0) {
-        cashSummaryData.push(['- Loan Insurance Fund', loanInsuranceFund, '']);
-      }
-
-      cashSummaryData.push(
-        ['= TOTAL GROUP STANDING', totalGroupStanding, ''],
-        ['', '', ''],
-        ['Share per Member', sharePerMember, `(₹${totalGroupStanding.toLocaleString()} ÷ ${group.memberCount})`]
-      );
-
-      // Add group monthly growth
-      if (previousMonthStanding > 0) {
-        const monthlyGrowth = calculateMonthlyGrowth(totalGroupStanding, previousMonthStanding);
+      const { amount, percentage } = calculateMonthlyGrowth(totalGroupStanding ?? 0, previousMonthStanding ?? 0);
         cashSummaryData.push(
           ['', '', ''],
-          ['Group Monthly Growth', monthlyGrowth.amount, `(${monthlyGrowth.percentage.toFixed(2)}%)`]
+          ['Group Monthly Growth', amount ?? 0, `(${(percentage ?? 0).toFixed(2)}%)`]
         );
-      }
 
       // Add cash summary to worksheet
       cashSummaryData.forEach(rowData => {
@@ -2326,7 +2229,7 @@ export default function ContributionTrackingPage() {
       ];
       
       // Ensure all cells have proper text wrapping and alignment
-      worksheet.eachRow((row, rowNumber) => {
+      worksheet.eachRow((row) => {
         row.eachCell((cell, colNumber) => {
           // Ensure cell has alignment object
           if (!cell.alignment) {
@@ -2867,38 +2770,6 @@ export default function ContributionTrackingPage() {
       setCurrentPeriod(null);
       setActualContributions({});
       setMemberContributions([]);
-      
-      console.log('🔄 [CLOSE PERIOD] State cleared, fetching fresh data...');
-      
-      // Refresh data to get new period
-      await fetchGroupData();
-      
-      console.log('🔄 [CLOSE PERIOD] Fresh data fetched, checking new state...');
-      
-      // **ENHANCED**: Provide better feedback about the period transition
-      let successMessage = 'Period closed successfully!';
-      
-      if (result.newPeriod) {
-        successMessage += ` New period created with ID: ${result.newPeriod.id}`;
-      } else if (result.currentPeriod) {
-        successMessage += ` Continue with period ID: ${result.currentPeriod.id}`;
-      }
-      
-      if (result.transition) {
-        if (result.transition.nextContributionTracking === 'READY') {
-          successMessage += ' - Contribution tracking is ready for the next period.';
-        } else {
-          successMessage += ' - Setting up contribution tracking for the next period...';
-        }
-      }
-      
-      // **NEW**: Additional verification - ensure we have a current period
-      if (!currentPeriod && result.currentPeriod) {
-        console.log('🔄 [CLOSE PERIOD] Setting current period from API response...');
-        setCurrentPeriod(result.currentPeriod);
-      }
-      
-      alert(successMessage);
     } catch (err) {
       console.error('Error closing period:', err);
       
@@ -3911,6 +3782,7 @@ export default function ContributionTrackingPage() {
                     const baseCompleted = paidContributions.length;
                     const inputCompleted = Object.keys(memberCollections).filter(memberId => {
                       const collection = memberCollections[memberId];
+                      if (!collection) return false;
                       const totalInput = (collection.cashAmount || 0) + (collection.bankAmount || 0);
                       return totalInput > 0;
                     }).length;
@@ -3922,6 +3794,7 @@ export default function ContributionTrackingPage() {
                     const basePending = unpaidContributions.length;
                     const inputCompleted = Object.keys(memberCollections).filter(memberId => {
                       const collection = memberCollections[memberId];
+                      if (!collection) return false;
                       const totalInput = (collection.cashAmount || 0) + (collection.bankAmount || 0);
                       return totalInput > 0;
                     }).length;
@@ -3935,6 +3808,7 @@ export default function ContributionTrackingPage() {
                     const baseCompleted = completedContributions.length;
                     const inputCompleted = Object.keys(memberCollections).filter(memberId => {
                       const collection = memberCollections[memberId];
+                      if (!collection) return false;
                       const totalInput = (collection.cashAmount || 0) + (collection.bankAmount || 0);
                       return totalInput > 0;
                     }).length;
@@ -3955,6 +3829,7 @@ export default function ContributionTrackingPage() {
                       const baseCompleted = completedContributions.length;
                       const inputCompleted = Object.keys(memberCollections).filter(memberId => {
                         const collection = memberCollections[memberId];
+                        if (!collection) return false;
                         const totalInput = (collection.cashAmount || 0) + (collection.bankAmount || 0);
                         return totalInput > 0;
                       }).length;
@@ -3971,6 +3846,7 @@ export default function ContributionTrackingPage() {
               const basePending = pendingContributions.length;
               const membersWithInput = Object.keys(memberCollections).filter(memberId => {
                 const collection = memberCollections[memberId];
+                if (!collection) return false;
                 const totalInput = (collection.cashAmount || 0) + (collection.bankAmount || 0);
                 return totalInput > 0;
               });
@@ -4154,6 +4030,19 @@ export default function ContributionTrackingPage() {
                   // Round up decimal values
                   const roundedValue = Math.ceil(value);
                   
+                  // 🔍 LOG: Collection change validation
+                  if (process.env.NODE_ENV === 'development') {
+                    console.log('🔄 [COLLECTION CHANGE DEBUG]', {
+                      memberId,
+                      memberName: contribution.memberName,
+                      field,
+                      originalValue: value,
+                      roundedValue,
+                      currentCashAmount: memberCollection.cashAmount,
+                      currentBankAmount: memberCollection.bankAmount
+                    });
+                  }
+                  
                   // Calculate maximum allowable total collection amount
                   const maxTotalDue = contribution.expectedContribution + 
                                     contribution.expectedInterest + 
@@ -4163,14 +4052,11 @@ export default function ContributionTrackingPage() {
                                     contribution.currentLoanBalance;
                   
                   const otherFieldAmount = field === 'cashAmount' ? memberCollection.bankAmount : memberCollection.cashAmount;
-                  const proposedTotal = roundedValue + otherFieldAmount;
-                  
-                  // Prevent entering more than total due amount
-                  const finalValue = Math.min(roundedValue, Math.max(0, maxTotalDue - otherFieldAmount));
+                  const finalValue = Math.min(roundedValue, Math.max(0, (maxTotalDue ?? 0) - (otherFieldAmount ?? 0)));
                   
                   const totalCollected = field === 'cashAmount' 
-                    ? finalValue + memberCollection.bankAmount 
-                    : memberCollection.cashAmount + finalValue;
+                    ? (finalValue ?? 0) + (memberCollection.bankAmount ?? 0)
+                    : (memberCollection.cashAmount ?? 0) + (finalValue ?? 0);
                   
                   // Distribute: compulsory contribution → interest → late fine → group social → loan insurance → loan repayment
                   let remaining = totalCollected;
@@ -4218,6 +4104,30 @@ export default function ContributionTrackingPage() {
                   
                   const newRemainingLoan = Math.max(0, contribution.currentLoanBalance - loanRepayment);
                   
+                  // 🔍 LOG: Final state being set
+                  if (process.env.NODE_ENV === 'development') {
+                    console.log('📝 [COLLECTION STATE DEBUG] Final member collection state:', {
+                      memberId,
+                      memberName: contribution.memberName,
+                      field,
+                      finalValue,
+                      totalCollected,
+                      distributions: {
+                        compulsoryContribution,
+                        interestPaid,
+                        lateFinePaid,
+                        groupSocialPaid,
+                        loanInsurancePaid,
+                        loanRepayment
+                      },
+                      cashBankBreakdown: {
+                        cashAmount: field === 'cashAmount' ? finalValue : memberCollection.cashAmount,
+                        bankAmount: field === 'bankAmount' ? finalValue : memberCollection.bankAmount
+                      },
+                      newRemainingLoan
+                    });
+                  }
+                  
                   setMemberCollections(prev => ({
                     ...prev,
                     [memberId]: {
@@ -4256,31 +4166,94 @@ export default function ContributionTrackingPage() {
                     <td className="px-4 py-4 whitespace-nowrap">
                       {showCompleted ? (
                         // Show actual cash/bank amounts for completed contributions
-                        <div className="text-center">
-                          <div className="text-sm font-medium text-foreground mb-2">Collection Details</div>
-                          <div className="grid grid-cols-2 gap-2 text-xs">
-                            <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded p-2">
-                              <div className="text-gray-600 dark:text-gray-400 mb-1">Cash</div>
-                              <div className="font-semibold text-green-800 dark:text-green-300">
-                                ₹{formatCurrency(memberCollection.cashAmount || 0)}
+                        (() => {
+                          const getAmountDetails = (actualContrib: any) => {
+                            if (!actualContrib || !actualContrib.cashAllocation) {
+                              const totalPaid = actualContrib?.totalPaid || 0;
+                              // Default split if no allocation data
+                              return {
+                                cash: Math.ceil(totalPaid * 0.3),
+                                bank: Math.ceil(totalPaid * 0.7),
+                                total: totalPaid,
+                              };
+                            }
+                            try {
+                              const allocation = typeof actualContrib.cashAllocation === 'string'
+                                ? JSON.parse(actualContrib.cashAllocation)
+                                : actualContrib.cashAllocation;
+
+                              const cashTotal = (allocation.contributionToCashInHand || 0) +
+                                (allocation.interestToCashInHand || 0) +
+                                (allocation.lateFineToHand || 0) +
+                                (allocation.groupSocialToHand || 0) +
+                                (allocation.loanInsuranceToHand || 0);
+
+                              const bankTotal = (allocation.contributionToCashInBank || 0) +
+                                (allocation.interestToCashInBank || 0) +
+                                (allocation.lateFineToBank || 0) +
+                                (allocation.groupSocialToBank || 0) +
+                                (allocation.loanInsuranceToBank || 0);
+                              
+                              const total = cashTotal + bankTotal;
+
+                              // Fallback to totalPaid if calculated total is zero
+                              return {
+                                cash: cashTotal,
+                                bank: bankTotal,
+                                total: total > 0 ? total : (actualContrib.totalPaid || 0),
+                              };
+                            } catch (e) {
+                              console.error('Error parsing cash allocation for total:', e);
+                              const totalPaid = actualContrib?.totalPaid || 0;
+                              return {
+                                cash: Math.ceil(totalPaid * 0.3),
+                                bank: Math.ceil(totalPaid * 0.7),
+                                total: totalPaid,
+                              };
+                            }
+                          };
+
+                          const { memberId } = contribution;
+                          const actualContrib = actualContributions[memberId];
+                          const amounts = getAmountDetails(actualContrib);
+                          const submissionDate = actualContrib?.submissionDate 
+                            ? new Date(actualContrib.submissionDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+                            : 'N/A';
+
+                          return (
+                            <div className="text-center">
+                              <div className="text-sm font-medium text-foreground mb-2">Collection Details</div>
+                              <div className="grid grid-cols-2 gap-2 text-xs">
+                                <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded p-2">
+                                  <div className="text-gray-600 dark:text-gray-400 mb-1">Cash</div>
+                                  <div className="font-semibold text-green-800 dark:text-green-300">
+                                    ₹{formatCurrency(amounts.cash)}
+                                  </div>
+                                </div>
+                                <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded p-2">
+                                  <div className="text-gray-600 dark:text-gray-400 mb-1">Bank</div>
+                                  <div className="font-semibold text-green-800 dark:text-green-300">
+                                    ₹{formatCurrency(amounts.bank)}
+                                  </div>
+                                </div>
+                              </div>
+                              <div className="text-sm text-gray-600 dark:text-gray-400 mt-2 text-center">
+                                <div className="font-medium">
+                                  Total: ₹{formatCurrency(amounts.total)}
+                                </div>
+                                <div className="text-xs text-gray-500 mt-1">
+                                  Submitted: {submissionDate}
+                                </div>
                               </div>
                             </div>
-                            <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded p-2">
-                              <div className="text-gray-600 dark:text-gray-400 mb-1">Bank</div>
-                              <div className="font-semibold text-green-800 dark:text-green-300">
-                                ₹{formatCurrency(memberCollection.bankAmount || 0)}
-                              </div>
-                            </div>
-                          </div>
-                          <div className="text-sm text-gray-600 dark:text-gray-400 mt-2 text-center">
-                            <div className="font-medium">
-                              Total: ₹{formatCurrency((memberCollection.cashAmount || 0) + (memberCollection.bankAmount || 0))}
-                            </div>
-                          </div>
-                        </div>
+                          );
+                        })()
                       ) : (
                         // Show input fields for pending contributions
                         (() => {
+                          const { memberId } = contribution;
+                          const memberCollection = memberCollections[memberId] || createInitialCollectionState(contribution);
+                          
                           // Calculate max total due amount for validation
                           const maxTotalDue = contribution.expectedContribution + 
                                             contribution.expectedInterest + 
@@ -4312,6 +4285,20 @@ export default function ContributionTrackingPage() {
                                       const value = Math.max(0, Number(inputValue) || 0);
                                       // Round up decimal values
                                       const roundedValue = Math.ceil(value);
+                                      
+                                      // 🔍 LOG: Cash input change validation
+                                      if (process.env.NODE_ENV === 'development') {
+                                        console.log('💰 [CASH INPUT DEBUG]', {
+                                          memberId,
+                                          memberName: contribution.memberName,
+                                          inputValue,
+                                          originalValue: value,
+                                          roundedValue,
+                                          currentBankAmount: memberCollection.bankAmount,
+                                          totalBeforeChange: memberCollection.cashAmount + memberCollection.bankAmount
+                                        });
+                                      }
+                                      
                                       handleCollectionChange('cashAmount', roundedValue);
                                     }}
                                     className={`w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary dark:bg-gray-700 dark:text-gray-100 ${
@@ -4347,6 +4334,20 @@ export default function ContributionTrackingPage() {
                                       const value = Math.max(0, Number(inputValue) || 0);
                                       // Round up decimal values
                                       const roundedValue = Math.ceil(value);
+                                      
+                                      // 🔍 LOG: Bank input change validation
+                                      if (process.env.NODE_ENV === 'development') {
+                                        console.log('🏦 [BANK INPUT DEBUG]', {
+                                          memberId,
+                                          memberName: contribution.memberName,
+                                          inputValue,
+                                          originalValue: value,
+                                          roundedValue,
+                                          currentCashAmount: memberCollection.cashAmount,
+                                          totalBeforeChange: memberCollection.cashAmount + memberCollection.bankAmount
+                                        });
+                                      }
+                                      
                                       handleCollectionChange('bankAmount', roundedValue);
                                     }}
                                     className={`w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-primary focus:border-primary dark:bg-gray-700 dark:text-gray-100 ${
@@ -4368,7 +4369,17 @@ export default function ContributionTrackingPage() {
                                   Total: ₹{formatCurrency(memberCollection.cashAmount + memberCollection.bankAmount)}
                                 </div>
                                 <div className="text-xs mt-1">
-                                  Max Due: ₹{formatCurrency(maxTotalDue)}
+                                  Expected Due: ₹{formatCurrency((() => {
+                                    // Calculate dynamic late fine based on submission date
+                                    const submissionDate = memberCollection.submissionDate || new Date();
+                                    const { lateFineAmount } = calculateLateFineForSubmissionDate(group!, submissionDate, contribution.expectedContribution);
+                                    
+                                    return contribution.expectedContribution + 
+                                           contribution.expectedInterest + 
+                                           lateFineAmount + 
+                                           (contribution.loanInsuranceAmount || 0) + 
+                                           (contribution.groupSocialAmount || 0);
+                                  })())}
                                 </div>
                                 {(memberCollection.cashAmount + memberCollection.bankAmount) > maxTotalDue && (
                                   <div className="text-red-500 text-xs mt-1 font-medium">
@@ -4459,7 +4470,7 @@ export default function ContributionTrackingPage() {
                             className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-green-500 dark:bg-gray-700 dark:text-gray-100"
                             min="0"
                             max={contribution.expectedContribution}
-                            step="0.01"
+                            step="1"
                             disabled={currentPeriod?.isClosed}
                           />
                         )}
@@ -4543,7 +4554,7 @@ export default function ContributionTrackingPage() {
                             className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-100"
                             min="0"
                             max={contribution.expectedInterest}
-                            step="0.01"
+                            step="1"
                             disabled={currentPeriod?.isClosed}
                           />
                         )}
@@ -4695,7 +4706,7 @@ export default function ContributionTrackingPage() {
                                   }`}
                                   min="0"
                                   max={lateFineAmount} // Use dynamic late fine amount
-                                  step="0.01"
+                                  step="1"
                                   disabled={currentPeriod?.isClosed || lateFineAmount === 0}
                                   placeholder={lateFineAmount === 0 ? 'No fine due' : '0'}
                                 />
@@ -4795,7 +4806,7 @@ export default function ContributionTrackingPage() {
                             className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-purple-500 dark:bg-gray-700 dark:text-gray-100"
                             min="0"
                             max={contribution.loanInsuranceAmount || 0}
-                            step="0.01"
+                            step="1"
                             disabled={currentPeriod?.isClosed}
                           />
                           )}
@@ -4876,7 +4887,7 @@ export default function ContributionTrackingPage() {
                             className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-orange-500 dark:bg-gray-700 dark:text-gray-100"
                             min="0"
                             max={contribution.groupSocialAmount || 0}
-                            step="0.01"
+                            step="1"
                             disabled={currentPeriod?.isClosed}
                           />
                           )}
@@ -4942,7 +4953,7 @@ export default function ContributionTrackingPage() {
                           className="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded focus:outline-none focus:ring-1 focus:ring-purple-500 dark:bg-gray-700 dark:text-gray-100"
                           min="0"
                           max={contribution.currentLoanBalance}
-                          step="0.01"
+                          step="1"
                           disabled={currentPeriod?.isClosed}
                         />
                         )}
@@ -4985,7 +4996,7 @@ export default function ContributionTrackingPage() {
                             onChange={(date) => {
                               if (date) {
                                 // Calculate new late fine amount based on the new submission date
-                                const { daysLate, lateFineAmount } = calculateLateFineForSubmissionDate(group!, date, contribution.expectedContribution);
+                                const { lateFineAmount } = calculateLateFineForSubmissionDate(group!, date, contribution.expectedContribution);
                                 
                                 // Get current paid amount for late fine
                                 const currentLateFinesPaid = memberCollection.lateFinePaid || 0;
@@ -5051,7 +5062,7 @@ export default function ContributionTrackingPage() {
                                   setMemberContributions(recalculatedContributions);
                                   
                                   // Update actual contributions with new submission date
-                                  setActualContributions(updatedPaymentData);
+                                  setActualContributions(updatedPaymentData as Record<string, ContributionRecord>);
                                 }
                                 
                                 // Show notification if late fine paid was adjusted
@@ -5293,16 +5304,16 @@ export default function ContributionTrackingPage() {
                       <span className="font-medium text-red-600 dark:text-red-400">₹{selectedMember.lateFineAmount.toLocaleString()}</span>
                     </div>
                   )}
-                  {group?.groupSocialEnabled && selectedMember.groupSocialAmount > 0 && (
+                  {group?.groupSocialEnabled && (selectedMember.groupSocialAmount ?? 0) > 0 && (
                     <div className="flex justify-between">
                       <span>Group Social:</span>
-                      <span className="font-medium text-purple-600 dark:text-purple-400">₹{selectedMember.groupSocialAmount.toLocaleString()}</span>
+                      <span className="font-medium text-purple-600 dark:text-purple-400">₹{(selectedMember.groupSocialAmount ?? 0).toLocaleString()}</span>
                     </div>
                   )}
-                  {group?.loanInsuranceEnabled && selectedMember.loanInsuranceAmount > 0 && (
+                  {group?.loanInsuranceEnabled && (selectedMember.loanInsuranceAmount ?? 0) > 0 && (
                     <div className="flex justify-between">
                       <span>Loan Insurance:</span>
-                      <span className="font-medium text-blue-600 dark:text-blue-400">₹{selectedMember.loanInsuranceAmount.toLocaleString()}</span>
+                      <span className="font-medium text-blue-600 dark:text-blue-400">₹{(selectedMember.loanInsuranceAmount ?? 0).toLocaleString()}</span>
                     </div>
                   )}
                   <div className="flex justify-between border-t border-gray-300 dark:border-gray-600 pt-1 font-semibold">
@@ -5571,20 +5582,20 @@ export default function ContributionTrackingPage() {
                       }
                       
                       // Then allocate to late fines
-                      if (remainingPayment > 0 && lateFinesEnabled && selectedMember.lateFineAmount > 0) {
-                        lateFinePayment = Math.min(remainingPayment, selectedMember.lateFineAmount);
+                      if (remainingPayment > 0 && lateFinesEnabled && (selectedMember.lateFineAmount ?? 0) > 0) {
+                        lateFinePayment = Math.min(remainingPayment, selectedMember.lateFineAmount || 0);
                         remainingPayment -= lateFinePayment;
                       }
                       
                       // Then allocate to group social
-                      if (remainingPayment > 0 && group?.groupSocialEnabled && selectedMember.groupSocialAmount > 0) {
-                        groupSocialPayment = Math.min(remainingPayment, selectedMember.groupSocialAmount);
+                      if (remainingPayment > 0 && group?.groupSocialEnabled && (selectedMember.groupSocialAmount || 0) > 0) {
+                        const groupSocialPayment = Math.min(remainingPayment, selectedMember.groupSocialAmount || 0);
                         remainingPayment -= groupSocialPayment;
                       }
                       
                       // Then allocate to loan insurance
-                      if (remainingPayment > 0 && group?.loanInsuranceEnabled && selectedMember.loanInsuranceAmount > 0) {
-                        loanInsurancePayment = Math.min(remainingPayment, selectedMember.loanInsuranceAmount);
+                      if (remainingPayment > 0 && group?.loanInsuranceEnabled && (selectedMember.loanInsuranceAmount || 0) > 0) {
+                        const loanInsurancePayment = Math.min(remainingPayment, selectedMember.loanInsuranceAmount || 0);
                         remainingPayment -= loanInsurancePayment;
                       }
                       
