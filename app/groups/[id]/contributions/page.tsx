@@ -2364,64 +2364,18 @@ export default function ContributionTrackingPage() {
       const pageWidth = doc.internal.pageSize.getWidth();
 
       // === HEADER SECTION ===
-      // Group logo area (placeholder for future logo implementation)
       doc.setFillColor(72, 49, 212); // Primary brand color
       doc.rect(0, 0, pageWidth, 35, 'F');
-      
-      // Main title
       doc.setFontSize(20);
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(255, 255, 255);
       doc.text(group.name.toUpperCase(), pageWidth / 2, 15, { align: 'center' });
-      
-      // Subtitle with period info
-      doc.setFontSize(12);
-      doc.setFont('helvetica', 'normal');
       const periodName = showOldContributions && selectedPeriodId 
         ? formatPeriodName(closedPeriods.find(p => p.id === selectedPeriodId))
         : formatPeriodName(currentPeriod);
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'normal');
       doc.text(`GROUP STATEMENT - ${periodName.toUpperCase()}`, pageWidth / 2, 28, { align: 'center' });
-
-      // === GROUP INFO SECTION ===
-      doc.setFillColor(248, 249, 250);
-      doc.rect(10, 40, pageWidth - 20, 35, 'F');
-      doc.setDrawColor(200, 200, 200);
-      doc.rect(10, 40, pageWidth - 20, 35, 'S');
-      
-      doc.setFontSize(10);
-      doc.setTextColor(0, 0, 0);
-      
-      // Left column
-      doc.setFont('helvetica', 'bold');
-      doc.text('Establishment Year:', 15, 50);
-      doc.setFont('helvetica', 'normal');
-      doc.text(group.establishmentYear?.toString() || 'N/A', 75, 50);
-      
-      doc.setFont('helvetica', 'bold');
-      doc.text('Total Members:', 15, 58);
-      doc.setFont('helvetica', 'normal');
-      doc.text(group.memberCount?.toString() || memberContributions.length.toString(), 75, 58);
-      
-      doc.setFont('helvetica', 'bold');
-      doc.text('Collection Frequency:', 15, 66);
-      doc.setFont('helvetica', 'normal');
-      doc.text(group.collectionFrequency?.toLowerCase().replace('_', ' ') || 'Monthly', 75, 66);
-      
-      // Right column
-      doc.setFont('helvetica', 'bold');
-      doc.text('Monthly Contribution:', 110, 50);
-      doc.setFont('helvetica', 'normal');
-      doc.text(formatCurrency(group.monthlyContribution), 170, 50);
-      
-      doc.setFont('helvetica', 'bold');
-      doc.text('Interest Rate:', 110, 58);
-      doc.setFont('helvetica', 'normal');
-      doc.text(`${Number(group.interestRate) || 0}% per month`, 170, 58);
-      
-      doc.setFont('helvetica', 'bold');
-      doc.text('Report Generated:', 110, 66);
-      doc.setFont('helvetica', 'normal');
-      doc.text(new Date().toLocaleDateString('en-IN'), 170, 66);
 
       // === CALCULATE ALL FINANCIAL DATA ===
       const totalExpected = memberContributions.reduce((sum, c) => sum + (c.totalExpected || 0), 0);
@@ -2433,7 +2387,6 @@ export default function ContributionTrackingPage() {
       const totalGroupSocial = memberContributions.reduce((sum, c) => sum + (c.groupSocialAmount || 0), 0);
       const totalPersonalLoanOutstanding = memberContributions.reduce((sum, c) => sum + (c.currentLoanBalance || 0), 0);
       
-      // Calculate cash allocation totals
       const totalCashInHand = Object.values(actualContributions).reduce((sum, record) => {
         if (record.cashAllocation) {
           try {
@@ -2441,7 +2394,7 @@ export default function ContributionTrackingPage() {
             return sum + (allocation.contributionToCashInHand || 0) + (allocation.interestToCashInHand || 0);
           } catch (_e) { return sum; }
         }
-        return sum + Math.ceil((record.totalPaid || 0) * 0.3); // Default 30% to cash
+        return sum + Math.ceil((record.totalPaid || 0) * 0.3);
       }, 0);
       
       const totalCashInBank = Object.values(actualContributions).reduce((sum, record) => {
@@ -2451,63 +2404,75 @@ export default function ContributionTrackingPage() {
             return sum + (allocation.contributionToCashInBank || 0) + (allocation.interestToCashInBank || 0);
           } catch (_e) { return sum; }
         }
-        return sum + Math.ceil((record.totalPaid || 0) * 0.7); // Default 70% to bank
+        return sum + Math.ceil((record.totalPaid || 0) * 0.7);
       }, 0);
 
+      // === GROUP INFO SECTION ===
+      let lastY = 45;
+      const groupInfoData = [
+        [{content: 'Establishment Year:', styles: {fontStyle: 'bold' as const}}, group.establishmentYear?.toString() || 'N/A'],
+        [{content: 'Total Members:', styles: {fontStyle: 'bold' as const}}, (group.memberCount || memberContributions.length).toString()],
+        [{content: 'Collection Frequency:', styles: {fontStyle: 'bold' as const}}, (group.collectionFrequency || 'MONTHLY').toLowerCase().replace('_', ' ')],
+        [{content: 'Monthly Contribution:', styles: {fontStyle: 'bold' as const}}, formatCurrency(group.monthlyContribution)],
+        [{content: 'Interest Rate:', styles: {fontStyle: 'bold' as const}}, `${Number(group.interestRate) || 0}% per month`],
+        [{content: 'Report Generated:', styles: {fontStyle: 'bold' as const}}, new Date().toLocaleDateString('en-IN')],
+      ];
+
+      autoTable(doc, {
+        startY: lastY,
+        body: groupInfoData,
+        theme: 'grid',
+        styles: { fontSize: 9 },
+      });
+      lastY = (doc as any).lastAutoTable.finalY;
+
       // === MEMBER CONTRIBUTIONS TABLE ===
-      // Create table headers dynamically based on enabled features - optimized for PDF width
+      lastY += 10;
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Member Contributions', 14, lastY);
+      lastY += 5;
+
       const tableHeaders = ['SL', 'Member Name', 'Contribution'];
       const columnWidths = [8, 32, 20];
       
-      // Add conditional columns only if they exist in the data - with abbreviated names
       if (memberContributions.some(m => (m.expectedInterest || 0) > 0)) {
         tableHeaders.push('Interest');
         columnWidths.push(15);
       }
-      
       if (memberContributions.some(m => (m.lateFineAmount || 0) > 0)) {
         tableHeaders.push('Fine');
         columnWidths.push(12);
       }
-      
       if (group.loanInsuranceEnabled && memberContributions.some(m => (m.loanInsuranceAmount || 0) > 0)) {
         tableHeaders.push('LI');
         columnWidths.push(10);
       }
-      
       if (group.groupSocialEnabled && memberContributions.some(m => (m.groupSocialAmount || 0) > 0)) {
         tableHeaders.push('GS');
         columnWidths.push(10);
       }
-      
       tableHeaders.push('Total', 'Paid', 'Bal', 'Loan', 'Status');
       columnWidths.push(15, 15, 15, 15, 10);
 
-      // Prepare table data
       const tableData = memberContributions.map((member, index) => {
         const row = [
           (index + 1).toString(),
           member.memberName || '',
           formatCurrency(member.expectedContribution)
         ];
-        
-        // Add conditional data columns
         if (memberContributions.some(m => (m.expectedInterest || 0) > 0)) {
           row.push(formatCurrency(member.expectedInterest));
         }
-        
         if (memberContributions.some(m => (m.lateFineAmount || 0) > 0)) {
           row.push(formatCurrency(member.lateFineAmount || 0));
         }
-        
         if (group.loanInsuranceEnabled && memberContributions.some(m => (m.loanInsuranceAmount || 0) > 0)) {
           row.push(formatCurrency(member.loanInsuranceAmount || 0));
         }
-        
         if (group.groupSocialEnabled && memberContributions.some(m => (m.groupSocialAmount || 0) > 0)) {
           row.push(formatCurrency(member.groupSocialAmount || 0));
         }
-        
         row.push(
           formatCurrency(member.totalExpected),
           formatCurrency(member.paidAmount || 0),
@@ -2515,31 +2480,22 @@ export default function ContributionTrackingPage() {
           formatCurrency(member.currentLoanBalance || 0),
           member.status === 'PAID' ? '✓' : member.status === 'PARTIAL' ? '~' : '✗'
         );
-        
         return row;
       });
 
-      // Create totals row
       const totalsRow = ['', 'TOTAL', formatCurrency(totalCompulsoryContribution)];
-      
-      // Add conditional totals
       if (memberContributions.some(m => (m.expectedInterest || 0) > 0)) {
         totalsRow.push(formatCurrency(totalInterestPaid));
       }
-      
       if (memberContributions.some(m => (m.lateFineAmount || 0) > 0)) {
         totalsRow.push(formatCurrency(totalLateFines));
       }
-      
       if (group.loanInsuranceEnabled && memberContributions.some(m => (m.loanInsuranceAmount || 0) > 0)) {
         totalsRow.push(formatCurrency(totalLoanInsurance));
       }
-      
       if (group.groupSocialEnabled && memberContributions.some(m => (m.groupSocialAmount || 0) > 0)) {
         totalsRow.push(formatCurrency(totalGroupSocial));
       }
-      
-      // Add totals for remaining columns
       totalsRow.push(
         formatCurrency(totalExpected),
         formatCurrency(totalCollected),
@@ -2548,9 +2504,8 @@ export default function ContributionTrackingPage() {
         `${memberContributions.filter(c => c.status === 'PAID').length}/${memberContributions.length}`
       );
 
-      // Generate the main table
       autoTable(doc, {
-        startY: 85,
+        startY: lastY,
         head: [tableHeaders],
         body: [...tableData, totalsRow],
         headStyles: {
@@ -2559,64 +2514,46 @@ export default function ContributionTrackingPage() {
           fontStyle: 'bold',
           fontSize: 9
         },
-        bodyStyles: {
-          fontSize: 8,
-          cellPadding: 2
-        },
+        bodyStyles: { fontSize: 8, cellPadding: 2 },
         columnStyles: Object.fromEntries(
           columnWidths.map((width, index) => [index, { cellWidth: width }])
         ),
-        alternateRowStyles: {
-          fillColor: [250, 250, 250]
-        },
+        alternateRowStyles: { fillColor: [250, 250, 250] },
         didParseCell: function(data) {
-          // Style the totals row
           if (data.row.index === tableData.length) {
             data.cell.styles.fillColor = [240, 240, 240];
             data.cell.styles.fontStyle = 'bold';
           }
-          
-          // Style status column with colors
           const statusColIndex = tableHeaders.length - 1;
           if (data.column.index === statusColIndex && data.section === 'body') {
             const status = data.cell.raw;
-            if (status === '✓') {
-              data.cell.styles.textColor = [46, 125, 50]; // Green
-            } else if (status === '~') {
-              data.cell.styles.textColor = [198, 130, 0]; // Orange
-            } else if (status === '✗') {
-              data.cell.styles.textColor = [198, 40, 40]; // Red
-            }
+            if (status === '✓') data.cell.styles.textColor = [46, 125, 50];
+            else if (status === '~') data.cell.styles.textColor = [198, 130, 0];
+            else if (status === '✗') data.cell.styles.textColor = [198, 40, 40];
           }
         }
       });
+      lastY = (doc as any).lastAutoTable.finalY;
 
       // === GROUP CASH SUMMARY SECTION ===
-      const tableEndY = (doc as any).lastAutoTable.finalY || 200;
-      let summaryY = tableEndY + 20;
-      
-      // Check if we need a new page
-      if (summaryY > 220) {
+      let summarySectionY = lastY + 15;
+      if (summarySectionY > 220) {
         doc.addPage();
-        summaryY = 20;
+        summarySectionY = 20;
       }
       
-      // Section header
       doc.setFillColor(72, 49, 212);
-      doc.rect(10, summaryY, pageWidth - 20, 15, 'F');
+      doc.rect(10, summarySectionY, pageWidth - 20, 12, 'F');
       doc.setFontSize(12);
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(255, 255, 255);
-      doc.text('GROUP CASH SUMMARY', 15, summaryY + 10);
+      doc.text('Group Cash Summary', pageWidth / 2, summarySectionY + 8, { align: 'center' });
+      summarySectionY += 15;
       
-      summaryY += 20;
-      
-      // Previous month data
       const previousCashInHand = group.cashInHand || 0;
       const previousCashInBank = group.balanceInBank || 0;
       const previousMonthBalance = previousCashInHand + previousCashInBank;
       
-      // Create cash summary table
       const cashSummaryData = [
         ['PREVIOUS MONTH', '', ''],
         ['Cash in Hand', formatCurrency(previousCashInHand), ''],
@@ -2641,54 +2578,41 @@ export default function ContributionTrackingPage() {
         ['Personal Loan Outstanding', formatCurrency(totalPersonalLoanOutstanding), ''],
       ];
 
-      // Add conditional fund rows
       if (group.groupSocialEnabled && totalGroupSocial > 0) {
         cashSummaryData.push(['Group Social Fund', formatCurrency(totalGroupSocial + (group.groupSocialBalance || 0)), '']);
       }
-      
       if (group.loanInsuranceEnabled && totalLoanInsurance > 0) {
         cashSummaryData.push(['Loan Insurance Fund', formatCurrency(totalLoanInsurance + (group.loanInsuranceBalance || 0)), '']);
       }
 
-      // Calculate Group Standing using the specified formula
       const newCashInGroup = previousMonthBalance + totalCollected;
       const groupSocialFund = totalGroupSocial + (group.groupSocialBalance || 0);
       const loanInsuranceFund = totalLoanInsurance + (group.loanInsuranceBalance || 0);
       const totalGroupStanding = newCashInGroup + totalPersonalLoanOutstanding - groupSocialFund - loanInsuranceFund;
       const sharePerMember = group.memberCount > 0 ? totalGroupStanding / group.memberCount : 0;
-
-      // Get previous period standing and monthly growth
       const previousMonthStanding = getPreviousPeriodStanding();
       const { amount: groupMonthlyGrowth, percentage: growthPercentage } = calculateMonthlyGrowth(
         totalGroupStanding,
         previousMonthStanding
       );
 
-      // Add group standing calculations
       cashSummaryData.push(
         ['', '', ''],
         ['TOTAL GROUP STANDING', '', ''],
         ['New Cash in Group', formatCurrency(newCashInGroup), ''],
         ['+ Personal Loan Outstanding', formatCurrency(totalPersonalLoanOutstanding), ''],
       );
-      
-      // Add conditional fund deductions
       if (groupSocialFund > 0) {
         cashSummaryData.push(['- Group Social Fund', formatCurrency(groupSocialFund), '']);
       }
-      
       if (loanInsuranceFund > 0) {
         cashSummaryData.push(['- Loan Insurance Fund', formatCurrency(loanInsuranceFund), '']);
       }
-      
-      // Add total and share per member
       cashSummaryData.push(
         ['= TOTAL GROUP STANDING', formatCurrency(totalGroupStanding), ''],
         ['', '', ''],
         ['Share per Member', formatCurrency(sharePerMember), `(${formatCurrency(totalGroupStanding)} ÷ ${group.memberCount})`]
       );
-
-      // Add group monthly growth if we have previous period data
       if (previousMonthStanding > 0) {
         cashSummaryData.push(
           ['', '', ''],
@@ -2696,41 +2620,27 @@ export default function ContributionTrackingPage() {
         );
       }
 
-      // Generate cash summary table
       autoTable(doc, {
-        startY: summaryY,
+        startY: summarySectionY,
         body: cashSummaryData,
+        theme: 'grid',
         columnStyles: {
-          0: { cellWidth: 50, fontStyle: 'bold' },
-          1: { cellWidth: 35, halign: 'right' },
-          2: { cellWidth: 40, fontSize: 7, textColor: [100, 100, 100] }
+          0: { cellWidth: 60, fontStyle: 'bold' },
+          1: { cellWidth: 40, halign: 'right' },
+          2: { cellWidth: 60, fontSize: 7, textColor: [100, 100, 100] }
         },
-        bodyStyles: {
-          fontSize: 9,
-          cellPadding: 1.5
-        },
+        bodyStyles: { fontSize: 9, cellPadding: 1.5 },
         didParseCell: function(data) {
-          // Convert cell value to string for comparison
           const cellValue = String(data.cell.raw || '');
-          
-          // Style header rows
-          if (cellValue === 'PREVIOUS MONTH' || 
-              cellValue === 'THIS MONTH COLLECTION' ||
-              cellValue === 'CASH ALLOCATION' || 
-              cellValue === 'NEW TOTALS' ||
-              cellValue === 'TOTAL GROUP STANDING') {
+          if (['PREVIOUS MONTH', 'THIS MONTH COLLECTION', 'CASH ALLOCATION', 'NEW TOTALS', 'TOTAL GROUP STANDING'].includes(cellValue)) {
             data.cell.styles.fillColor = [240, 248, 255];
             data.cell.styles.fontStyle = 'bold';
           }
-          
-          // Style the final total
           if (cellValue === '= TOTAL GROUP STANDING') {
             data.cell.styles.fillColor = [72, 49, 212];
             data.cell.styles.textColor = [255, 255, 255];
             data.cell.styles.fontStyle = 'bold';
           }
-          
-          // Style the monthly growth row
           if (cellValue === 'Group Monthly Growth') {
             data.cell.styles.fillColor = [230, 255, 230];
             data.cell.styles.fontStyle = 'bold';
@@ -2752,7 +2662,6 @@ export default function ContributionTrackingPage() {
         );
       }
 
-      // Save the PDF
       const fileName = `${group.name.replace(/[^a-zA-Z0-9]/g, '_')}_Statement_${periodName.replace(/[^a-zA-Z0-9]/g, '_')}_${new Date().toISOString().split('T')[0]}.pdf`;
       doc.save(fileName);
       setShowReportModal(false);
@@ -6454,10 +6363,10 @@ export default function ContributionTrackingPage() {
       )}
 
       {/* Generate Report Modal */}
-      <ReportModal
+      <ReportModal 
         showModal={showReportModal}
         onClose={() => setShowReportModal(false)}
-        onGeneratePDF={handleDownloadPDF}
+        onGeneratePDF={generatePDFReport}
         onGenerateExcel={generateExcelReport}
         onGenerateCSV={generateCSVReport}
         periodName={showOldContributions && selectedPeriodId 
