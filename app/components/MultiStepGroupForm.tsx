@@ -18,17 +18,24 @@ import { roundToTwoDecimals } from '@/app/lib/currency-utils';
 import { CollectionFrequency } from '@prisma/client';
 
 // Component for real-time Group Social calculation that updates automatically
-function GroupSocialCalculation({ watchedMembers, watchedGroupSocialAmountPerFamilyMember, watch }) {
+function GroupSocialCalculation({ watchedMembers, watchedGroupSocialAmountPerFamilyMember, watch, watchedFamilyMemberCounts }) {
   const memberFieldsData = watchedMembers || [];
-  let totalFamilyMembers = 0;
   
-  // Calculate family members using direct watch calls for each member to ensure real-time updates
-  memberFieldsData.forEach((member, index) => {
-    const familySize = watch(`members.${index}.familyMembersCount`) || 1;
-    totalFamilyMembers += familySize;
-  });
+  // Calculate family members using the watchedFamilyMemberCounts array for reactive updates
+  const totalFamilyMembers = watchedFamilyMemberCounts.reduce((sum, familySize) => {
+    const size = Number(familySize) || 1;
+    return sum + size;
+  }, 0);
   
   const calculatedAmount = ((watchedGroupSocialAmountPerFamilyMember || 0) * totalFamilyMembers);
+  
+  // Debug logging to monitor real-time updates
+  console.log('🔄 GroupSocialCalculation render:', {
+    totalFamilyMembers,
+    perFamilyAmount: watchedGroupSocialAmountPerFamilyMember,
+    calculatedAmount,
+    watchedFamilyMemberCounts
+  });
   
   return <>₹{calculatedAmount.toFixed(2)}</>;
 }
@@ -834,6 +841,9 @@ The PDF may contain scanned images or use an unsupported format.
   
   // State for controlling whether to subtract LI and GS from group standing
   const [subtractLIandGS, setSubtractLIandGS] = useState(false);
+
+  // Force re-render trigger for Step 4 calculations
+  const [calcRefreshKey, setCalcRefreshKey] = useState(0);
 
   const totalSteps = 4; // Increased to 4 steps
 
@@ -3113,15 +3123,36 @@ The PDF may contain scanned images or use an unsupported format.
   const watchedIncludeDataTillCurrentPeriod = watch('includeDataTillCurrentPeriod');
 
   // Watch individual family member counts and loan amounts for efficient updates
-  const watchedFamilyMemberCounts = useMemo(() => 
-    (watchedMembers || []).map((member) => member.familyMembersCount || 1), 
-    [watchedMembers]
-  );
+  // Use useWatch for more reliable form field watching
+  const allMembersData = useWatch({ control, name: 'members' });
+  
+  const watchedFamilyMemberCounts = useMemo(() => {
+    const counts = (allMembersData || []).map(member => member?.familyMembersCount || 1);
+    console.log('🔄 useWatch watchedFamilyMemberCounts:', counts);
+    return counts;
+  }, [allMembersData]);
 
-  const watchedLoanAmounts = useMemo(() => 
-    (watchedMembers || []).map((member) => member.currentLoanAmount || 0), 
-    [watchedMembers]
-  );
+  const watchedLoanAmounts = useMemo(() => {
+    const amounts = (allMembersData || []).map(member => member?.currentLoanAmount || 0);
+    console.log('🔄 useWatch watchedLoanAmounts:', amounts);
+    return amounts;
+  }, [allMembersData]);
+
+  // Debug effect to monitor family member count changes
+  useEffect(() => {
+    console.log('🔍 useWatch Family member counts changed:', watchedFamilyMemberCounts);
+    console.log('🔍 useWatch Loan amounts changed:', watchedLoanAmounts);
+    console.log('🔍 useWatch All members data:', allMembersData?.map((m, i) => ({
+      index: i,
+      name: m.name,
+      familySize: m.familyMembersCount,
+      loanAmount: m.currentLoanAmount
+    })));
+    
+    // Force re-render for Step 4 calculations when family counts change
+    setCalcRefreshKey(prev => prev + 1);
+    
+  }, [watchedFamilyMemberCounts, watchedLoanAmounts, allMembersData]);
 
   // Removed excessive debug logging that was causing performance issues
 
@@ -3424,6 +3455,7 @@ The PDF may contain scanned images or use an unsupported format.
                                   watchedMembers={watchedMembers}
                                   watchedGroupSocialAmountPerFamilyMember={watchedGroupSocialAmountPerFamilyMember}
                                   watch={watch}
+                                  watchedFamilyMemberCounts={watchedFamilyMemberCounts}
                                 />
                               </p>
                             </div>
@@ -3999,7 +4031,7 @@ The PDF may contain scanned images or use an unsupported format.
         </div>
       </div>
     );
-  }, [watchedCashInHand, watchedBalanceInBank, watchedGlobalShareAmount, watchedMembers, collectionFrequency, watchedInterestRate, watchedMonthlyContribution, watchedGroupSocialEnabled, watchedGroupSocialAmountPerFamilyMember, watchedLoanInsuranceEnabled, watchedLoanInsurancePercent, watchedGroupSocialPreviousBalance, watchedLoanInsurancePreviousBalance, watchedIncludeDataTillCurrentPeriod, control, errors, memberFields, getShareLabel, setValue, watch, subtractLIandGS]); // Re-added watch for real-time updates
+  }, [watchedCashInHand, watchedBalanceInBank, watchedGlobalShareAmount, watchedMembers, collectionFrequency, watchedInterestRate, watchedMonthlyContribution, watchedGroupSocialEnabled, watchedGroupSocialAmountPerFamilyMember, watchedLoanInsuranceEnabled, watchedLoanInsurancePercent, watchedGroupSocialPreviousBalance, watchedLoanInsurancePreviousBalance, watchedIncludeDataTillCurrentPeriod, control, errors, memberFields, getShareLabel, setValue, watch, subtractLIandGS, watchedFamilyMemberCounts, watchedLoanAmounts, calcRefreshKey]); // Added calcRefreshKey to force re-render when family counts change
 
   // Duplicate function removed - using definition above
 
