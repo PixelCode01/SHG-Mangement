@@ -1,5 +1,4 @@
 {
-  "ignoreCommand": "echo 'Skipping build errors for deployment'",
-  "buildCommand": "npm run build || true",
+  "buildCommand": "npm run build",
   "framework": "nextjs"
 }
