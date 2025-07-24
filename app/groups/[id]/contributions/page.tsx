@@ -315,6 +315,10 @@ export default function ContributionTrackingPage() {
   // New state for individual member collection inputs
   const [memberCollections, setMemberCollections] = useState<Record<string, MemberCollectionState>>({});
 
+  // Rate limiting for fetchGroupData to prevent excessive API calls during period close operations
+  const [lastFetchTime, setLastFetchTime] = useState<number>(0);
+  const FETCH_RATE_LIMIT_MS = 2000; // Minimum 2 seconds between calls to prevent infinite loops
+
   useEffect(() => {
     fetchGroupData();
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -364,6 +368,16 @@ export default function ContributionTrackingPage() {
   };
 
   const fetchGroupData = useCallback(async () => {
+    // Rate limiting to prevent excessive API calls
+    const now = Date.now();
+    if (now - lastFetchTime < FETCH_RATE_LIMIT_MS) {
+      console.log('⏸️ [FETCH] Rate limited - skipping fetch call (last call was', now - lastFetchTime, 'ms ago)');
+      return;
+    }
+    
+    console.log('🔄 [FETCH] Starting fresh data fetch...');
+    setLastFetchTime(now);
+    
     try {
       // Fetch group data
       const groupResponse = await fetch(`/api/groups/${groupId}`);
@@ -479,11 +493,18 @@ export default function ContributionTrackingPage() {
     } finally {
       setLoading(false);
     }
-  }, [groupId]);
+  }, [groupId, lastFetchTime, FETCH_RATE_LIMIT_MS]);
 
   // Calculate member contributions when both group and currentPeriod are available
   useEffect(() => {
+    // Skip recalculation during period close to prevent infinite loops
+    if (closingPeriod) {
+      console.log('⏸️ [USEEFFECT] Skipping calculation during period close operation');
+      return;
+    }
+    
     if (group && currentPeriod && Object.keys(actualContributions).length >= 0) {
+      console.log('🔄 [USEEFFECT] Calculating member contributions with fresh data');
       const calculatedContributions = calculateMemberContributions(group, actualContributions);
       setMemberContributions(calculatedContributions);
 
@@ -502,7 +523,7 @@ export default function ContributionTrackingPage() {
         setMemberCollections((prev) => ({ ...prev, ...initialCollections }));
       }
     }
-  }, [group, currentPeriod, actualContributions]); // Remove memberCollections to prevent infinite loop
+  }, [group, currentPeriod, actualContributions, closingPeriod]); // Add closingPeriod to dependencies
 
   // Calculate the next due date based on collection frequency
   const calculateNextDueDate = (groupData: GroupData): Date => {
@@ -1149,16 +1170,12 @@ export default function ContributionTrackingPage() {
         }
       }
 
-      // Refresh group data to update loan balances and contribution data
+      // Update the state immediately - no need for fetchGroupData since we have the response
       if (process.env.NODE_ENV === 'development') {
-        console.log('🔄 [SUBMISSION] Refreshing group data...');
-      }
-      await fetchGroupData();
-      if (process.env.NODE_ENV === 'development') {
-        console.log('🔄 [SUBMISSION] Group data refreshed successfully');
+        console.log('🔄 [SUBMISSION] Updating local state with API response...');
       }
       
-      // Clear the member collection data after successful submission and refresh
+      // Clear the member collection data after successful submission
       setMemberCollections((prev) => {
         const newState = { ...prev };
         delete newState[memberId];
@@ -1443,10 +1460,15 @@ export default function ContributionTrackingPage() {
         }
       }));
 
-      // Refresh the data
-      await Promise.all([
-        fetchGroupData(),
-      ]);
+      // Recalculate member contributions with updated state - no need for fetchGroupData
+      if (group) {
+        const updatedPaymentData = {
+          ...actualContributions,
+          [memberId]: updatedContribution
+        };
+        const recalculatedContributions = calculateMemberContributions(group, updatedPaymentData);
+        setMemberContributions(recalculatedContributions);
+      }
 
       alert('Contribution marked as unpaid successfully!');
       
@@ -2665,8 +2687,10 @@ export default function ContributionTrackingPage() {
         totalCollectionThisPeriod: currentPeriod.totalCollectionThisPeriod,
         periodId: currentPeriod.id
       });
-      await fetchGroupData(); // Refresh to get latest state
-      alert('This period has already been closed. The page has been refreshed with the latest data.');
+      // Note: No need for fetchGroupData here as the data should already be current
+      alert('This period has already been closed. The page will be refreshed with the latest data.');
+      // Reload the page to get fresh state to avoid useEffect loops
+      window.location.reload();
       return;
     }
     
@@ -2721,11 +2745,11 @@ export default function ContributionTrackingPage() {
         
         // Handle specific error cases
         if (response.status === 409) {
-          // Period already closed - refresh data and show user-friendly message
-          await fetchGroupData(); // Refresh to get latest state
+          // Period already closed - show user-friendly message and reload page
+          console.log('Period closure conflict detected - period already closed');
           
           // Try to parse as JSON for better error message
-          let message = 'This period has already been closed. The page has been refreshed with the latest data.';
+          let message = 'This period has already been closed. The page will be refreshed with the latest data.';
           try {
             const errorJson = JSON.parse(errorData);
             if (errorJson.message) {
@@ -2740,6 +2764,8 @@ export default function ContributionTrackingPage() {
           }
           
           alert(message);
+          // Reload the page to get fresh state and avoid useEffect loops
+          window.location.reload();
           return; // Don't throw, just return as this is handled
         }
         
@@ -2766,18 +2792,20 @@ export default function ContributionTrackingPage() {
       console.log('   - Contributions Before Clear:', Object.keys(actualContributions).length);
       console.log('   - Member Contributions Before Clear:', memberContributions.length);
       
-      // Clear current state to force a fresh fetch
-      setCurrentPeriod(null);
-      setActualContributions({});
-      setMemberContributions([]);
+      // Instead of clearing state and relying on useEffect, immediately refresh with fresh data
+      // This prevents multiple useEffect triggers and the infinite fetch loop
+      console.log('🔄 [CLOSE PERIOD] Refreshing data immediately to prevent useEffect loops...');
+      await fetchGroupData();
     } catch (err) {
       console.error('Error closing period:', err);
       
       // Check if this is a "already closed" error from the backend
       if (err instanceof Error && err.message.includes('already been closed')) {
         // This was already handled above in the 409 case, but check if it came through a different path
-        await fetchGroupData();
-        alert('This period has already been closed. The page has been refreshed with the latest data.');
+        console.log('Caught "already closed" error in catch block');
+        alert('This period has already been closed. The page will be refreshed with the latest data.');
+        // Reload the page to get fresh state and avoid useEffect loops
+        window.location.reload();
       } else {
         alert(err instanceof Error ? err.message : 'Failed to close period. Please try again.');
       }
