@@ -1,18 +1,17 @@
 'use client';
 
 import { useState } from 'react';
-import { roundToTwoDecimals } from '@/app/lib/currency-utils';
 
 interface ReportGeneratorProps {
-  group: any;
-  currentPeriod: any;
-  memberContributions: any[];
-  oldPeriods: any[];
-  formatPeriodName: (period: any) => string;
+  group: Record<string, unknown>;
+  currentPeriod: Record<string, unknown>;
+  memberContributions: Record<string, unknown>[];
+  oldPeriods: Record<string, unknown>[];
+  formatPeriodName: (period: Record<string, unknown>) => string;
   selectedPeriodId?: string;
-  closedPeriods?: any[];
+  closedPeriods?: Record<string, unknown>[];
   showOldContributions?: boolean;
-  actualContributions?: Record<string, any>;
+  actualContributions?: Record<string, Record<string, unknown>>;
 }
 
 export default function ReportGenerator({
@@ -295,7 +294,7 @@ export default function ReportGenerator({
       });
 
       // === GROUP CASH SUMMARY SECTION ===
-      const tableEndY = (doc as any).lastAutoTable.finalY || 200;
+      const tableEndY = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable?.finalY || 200;
       let summaryY = tableEndY + 20;
       
       // Check if we need a new page

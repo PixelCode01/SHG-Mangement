@@ -158,7 +158,7 @@ const EnhancedFinancialSummary: React.FC<EnhancedFinancialSummaryProps> = ({
     return sum + (member.currentLoanBalance || 0);
   }, 0));
   
-  const collectionThisPeriod = Math.ceil(totalCollected);
+  const _collectionThisPeriod = Math.ceil(totalCollected);
   const interestThisPeriod = Math.ceil(memberContributions.reduce((sum, member) => {
     return sum + member.expectedInterest;
   }, 0));

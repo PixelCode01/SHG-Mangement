@@ -18,8 +18,7 @@ import {
   CodeBracketIcon,
   Cog6ToothIcon,
   PlusIcon,
-  TrashIcon,
-  DocumentDuplicateIcon
+  TrashIcon
 } from '@heroicons/react/24/outline';
 
 import {
@@ -27,9 +26,7 @@ import {
   ColumnDataType,
   ColumnProperty,
   ColumnFormula,
-  GroupCustomSchema,
-  PropertyType,
-  ConditionalOperator
+  GroupCustomSchema
 } from '@/app/types/custom-columns';
 import { FormulaBuilder } from './FormulaBuilder';
 import { PropertyEditor } from './PropertyEditor';
@@ -84,7 +81,7 @@ export function ColumnEditor({ column, schema, onSave, onClose }: ColumnEditorPr
   const [dropdownOptions, setDropdownOptions] = useState<{ value: string; label: string; color?: string }[]>(
     column?.dropdownOptions || []
   );
-  const [previewData, setPreviewData] = useState<any>(null);
+  const [_previewData, _setPreviewData] = useState<Record<string, unknown> | null>(null);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
 
   const {
@@ -146,7 +143,7 @@ export function ColumnEditor({ column, schema, onSave, onClose }: ColumnEditorPr
     };
     
     if (formatMap[dataType] !== formatType) {
-      setValue('displayConfig.formatType', formatMap[dataType] as any);
+      setValue('displayConfig.formatType', formatMap[dataType] as 'currency' | 'percentage' | 'number' | 'text' | 'date');
     }
   }, [dataType, formatType, setValue]);
 
@@ -262,8 +259,9 @@ export function ColumnEditor({ column, schema, onSave, onClose }: ColumnEditorPr
       // Add more sample data as needed
     };
     
-    setPreviewData(sampleData);
-  }, []);
+    // For now, just store the preview data (removed console.log for production build)
+    _setPreviewData(sampleData);
+  }, [_setPreviewData]);
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
@@ -315,7 +313,7 @@ export function ColumnEditor({ column, schema, onSave, onClose }: ColumnEditorPr
             ].map(tab => (
               <button
                 key={tab.key}
-                onClick={() => setActiveTab(tab.key as any)}
+                onClick={() => setActiveTab(tab.key as 'basic' | 'properties' | 'formula' | 'display' | 'validation')}
                 className={`flex items-center py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
                   activeTab === tab.key
                     ? 'border-blue-500 text-blue-600'

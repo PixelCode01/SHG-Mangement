@@ -56,6 +56,32 @@ function GroupSocialCalculation({ watchedMembers, watchedGroupSocialAmountPerFam
 const dayOfWeekEnum = z.enum(["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]);
 const lateFineRuleTypeEnum = z.enum(["DAILY_FIXED", "DAILY_PERCENTAGE", "TIER_BASED"]);
 
+// Interface for member data from server API response
+interface ServerMemberResponse {
+  name: string;
+  currentShare?: number;
+  currentLoanAmount?: number;
+  loanAmount?: number;
+}
+
+// Interface for displayable members with optional imported properties
+interface DisplayableMember {
+  id: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  loanAmount?: number;
+  isFromImport?: boolean;
+}
+
+// Interface for processed members from PDF/Excel import
+interface ProcessedMember {
+  name: string;
+  loanAmount: number;
+  email?: string;
+  phone?: string;
+}
+
 // Schema for individual member data within the form
 const memberDataSchema = z.object({
   memberId: z.string(),
@@ -639,7 +665,7 @@ export default function MultiStepGroupForm({ members: initialAvailableMembers = 
       }
       
       // Convert server response to MemberImportRow format
-      const members: MemberImportRow[] = result.members.map((member: any, index: number) => ({
+      const members: MemberImportRow[] = result.members.map((member: ServerMemberResponse, index: number) => ({
         id: (index + 1).toString(),
         memberId: `IMPORT_${index + 1}`,
         name: member.name,
@@ -707,7 +733,7 @@ export default function MultiStepGroupForm({ members: initialAvailableMembers = 
         // Process data rows
         worksheet.eachRow((row, rowNumber) => {
           if (rowNumber > 1) { // Skip header row
-            const rowData: any = {};
+            const rowData: Record<string, string> = {};
             row.eachCell((cell, colNumber) => {
               const header = headers[colNumber - 1];
               if (header) {
@@ -819,7 +845,7 @@ The PDF may contain scanned images or use an unsupported format.
   const [createMemberError, setCreateMemberError] = useState<string | null>(null);
   
   // State to manage the list of members displayable in dropdowns within this form instance
-  const [displayableMembers, setDisplayableMembers] = useState<{ id: string; name: string }[]>(initialAvailableMembers);
+  const [displayableMembers, setDisplayableMembers] = useState<DisplayableMember[]>(initialAvailableMembers);
   
   // State for leader linking notification
   const [leaderLinkingStatus, setLeaderLinkingStatus] = useState<string | null>(null);
@@ -844,7 +870,7 @@ The PDF may contain scanned images or use an unsupported format.
     setFocus,
     reset, // Added reset
   } = useForm<GroupFormValues>({
-    resolver: zodResolver(groupSchema) as any,
+    resolver: zodResolver(groupSchema),
     mode: 'onSubmit', // Changed to onSubmit to reduce validation noise
     reValidateMode: 'onChange', // Re-validate on change after first submit
     defaultValues: { // Initial default values, will be overridden by reset in edit mode
@@ -983,7 +1009,7 @@ The PDF may contain scanned images or use an unsupported format.
 
       if (leaderIndex === -1) {
         // Get imported loan amount if available
-        const importedLoanAmount = (leaderMember as any)?.loanAmount || 0;
+        const importedLoanAmount = leaderMember?.loanAmount || 0;
         
         console.log(`🔍 Auto-adding leader ${leaderMember.name}:`, {
           memberId: leaderMember.id,
@@ -1057,7 +1083,7 @@ The PDF may contain scanned images or use an unsupported format.
     if (memberIndex === -1) {
         // Find the member in displayableMembers to get their imported loan amount
         const memberInfo = displayableMembers.find(m => m.id === memberId);
-        const importedLoanAmount = (memberInfo as any)?.loanAmount || 0;
+        const importedLoanAmount = memberInfo?.loanAmount || 0;
         
         // DEBUG: Log the loan amount being set
         console.log(`🔍 Adding member ${memberName}:`, {
@@ -1106,7 +1132,7 @@ The PDF may contain scanned images or use an unsupported format.
         // Only add if not already selected
         if (!currentlySelectedIds.has(member.id)) {
           // Get imported loan amount if available
-          const importedLoanAmount = (member as any)?.loanAmount || 0;
+          const importedLoanAmount = member?.loanAmount || 0;
           
           console.log(`🔍 Adding member via Select All ${member.name}:`, {
             memberId: member.id,
@@ -1184,7 +1210,7 @@ The PDF may contain scanned images or use an unsupported format.
       
       // Step 1: Create members from imported data if any exist (they have temporary IDs starting with 'temp_')
       const importedMembersToCreate = displayableMembers.filter(member => 
-        member.id.startsWith('temp_') && (member as any).isFromImport
+        member.id.startsWith('temp_') && member.isFromImport
       );
       
       if (importedMembersToCreate.length > 0) {
@@ -1202,8 +1228,8 @@ The PDF may contain scanned images or use an unsupported format.
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 name: member.name,
-                email: (member as any).email,
-                phone: (member as any).phone,
+                email: member.email,
+                phone: member.phone,
               }),
             });
 
@@ -2165,7 +2191,7 @@ The PDF may contain scanned images or use an unsupported format.
           worksheet.eachRow((row, rowNumber) => {
             if (rowNumber > 1) { // Skip header row
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const rowData: any = {};
+              const rowData: Record<string, string> = {};
               row.eachCell((cell, colNumber) => {
                 const header = headers[colNumber - 1];
                 if (header) {
@@ -2234,7 +2260,7 @@ The PDF may contain scanned images or use an unsupported format.
               console.log(`  ${i + 1}. ${member.name} - loanAmount: ${member.loanAmount} (type: ${typeof member.loanAmount})`);
             });
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const totalLoanAmount = processedMembers.reduce((sum: number, m: any) => sum + (m.loanAmount || 0), 0);
+            const totalLoanAmount = processedMembers.reduce((sum: number, m: ProcessedMember) => sum + (m.loanAmount || 0), 0);
             console.log(`🔍 DEBUG: Total loan amount before state: ₹${totalLoanAmount.toLocaleString()}`);
             
             // Display detailed information about what was found
@@ -4209,7 +4235,7 @@ The PDF may contain scanned images or use an unsupported format.
               <>
                 <button
                   type="button"
-                  onClick={handleSubmit(handleFormSubmit as any)}
+                  onClick={handleSubmit(handleFormSubmit)}
                   className="ml-auto px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-primary hover:bg-primary-dark focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary disabled:opacity-50 disabled:cursor-not-allowed"
                   disabled={isLoading}
                 >

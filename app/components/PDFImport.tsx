@@ -8,24 +8,22 @@
 import React, { useState, useCallback, useRef } from 'react';
 import { 
   DocumentArrowUpIcon, 
-  DocumentCheckIcon, 
   ExclamationTriangleIcon,
-  EyeIcon,
   CheckCircleIcon,
   XCircleIcon,
   ArrowPathIcon
 } from '@heroicons/react/24/outline';
 
-import { GroupCustomSchema, CustomColumn } from '@/app/types/custom-columns';
+import { GroupCustomSchema } from '@/app/types/custom-columns';
 
 interface PDFImportProps {
   schema: GroupCustomSchema;
-  onDataImported: (data: Record<string, any>[]) => void;
+  onDataImported: (data: Record<string, unknown>[]) => void;
   onClose: () => void;
 }
 
 interface ExtractedData {
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export function PDFImport({ schema, onDataImported, onClose }: PDFImportProps) {
@@ -85,21 +83,21 @@ export function PDFImport({ schema, onDataImported, onClose }: PDFImportProps) {
       
       if (patterns.amount.test(trimmedLine)) {
         const match = trimmedLine.match(patterns.amount);
-        if (match) {
+        if (match && currentEntry) {
           currentEntry.amount = parseFloat(match[1].replace(/,/g, ''));
         }
       }
       
       if (patterns.date.test(trimmedLine)) {
         const match = trimmedLine.match(patterns.date);
-        if (match) {
+        if (match && currentEntry) {
           currentEntry.date = match[1];
         }
       }
       
       if (patterns.balance.test(trimmedLine)) {
         const match = trimmedLine.match(patterns.balance);
-        if (match) {
+        if (match && currentEntry) {
           currentEntry.balance = parseFloat(match[1].replace(/,/g, ''));
         }
       }
@@ -130,7 +128,7 @@ export function PDFImport({ schema, onDataImported, onClose }: PDFImportProps) {
       const lines = await extractTextFromPDF(selectedFile);
       setPreviewData(lines.slice(0, 20)); // Preview first 20 lines
       setStep('preview');
-    } catch (error) {
+    } catch (_error) {
       setErrors(['Failed to extract text from PDF. Please try again.']);
     } finally {
       setIsProcessing(false);
@@ -164,7 +162,7 @@ export function PDFImport({ schema, onDataImported, onClose }: PDFImportProps) {
       
       setMappings(autoMappings);
       setStep('mapping');
-    } catch (error) {
+    } catch (_error) {
       setErrors(['Failed to process PDF data. Please check the file format.']);
     } finally {
       setIsProcessing(false);
@@ -182,7 +180,7 @@ export function PDFImport({ schema, onDataImported, onClose }: PDFImportProps) {
   // Generate final mapped data
   const generateMappedData = useCallback(() => {
     return extractedData.map(item => {
-      const mapped: Record<string, any> = {};
+      const mapped: Record<string, unknown> = {};
       
       schema.columns.forEach(column => {
         const fieldMapping = mappings[column.id];
@@ -436,7 +434,7 @@ export function PDFImport({ schema, onDataImported, onClose }: PDFImportProps) {
                       <tr key={index}>
                         {schema.columns.map(column => (
                           <td key={column.id} className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
-                            {row[column.id] || '-'}
+                            {String(row[column.id] || '-')}
                           </td>
                         ))}
                       </tr>

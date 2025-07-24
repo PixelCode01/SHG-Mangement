@@ -6,7 +6,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
+import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { 
   PlusIcon, 
   PencilIcon, 
@@ -136,7 +136,7 @@ export function CustomColumnsManager({
   }, [schema, onSchemaChange]);
 
   // Handle column reordering
-  const handleDragEnd = useCallback((result: any) => {
+  const handleDragEnd = useCallback((result: DropResult) => {
     if (!result.destination) return;
 
     const items = Array.from(schema.columns);
@@ -299,7 +299,7 @@ export function CustomColumnsManager({
     onCancel();
   }, [onCancel]);
 
-  const handlePDFImport = useCallback((importedData: Record<string, any>[]) => {
+  const handlePDFImport = useCallback((importedData: Record<string, unknown>[]) => {
     console.log('PDF Import: Received data:', importedData);
     // Here you would integrate with your data system
     // For now, we'll just show a success message

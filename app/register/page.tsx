@@ -235,13 +235,6 @@ export default function RegisterPage() {
     <div className="max-w-md mx-auto mt-10 p-6 bg-card rounded-md shadow-md border border-border">
       <h1 className="text-2xl font-bold mb-6 text-center">Register</h1>
       
-      {error && (
-        <div className="bg-destructive/20 text-destructive p-3 rounded-md mb-4">
-          <p className="font-semibold">Error</p>
-          <p>{error}</p>
-        </div>
-      )}
-
       {success && (
         <div className="bg-green-500/20 text-green-600 p-3 rounded-md mb-4">
           <p className="font-semibold">Success</p>
@@ -402,6 +395,13 @@ export default function RegisterPage() {
         >
           {loading ? 'Registering...' : 'Register'}
         </button>
+        
+        {/* Error display below register button */}
+        {error && (
+          <div className="mt-3 p-3 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-md">
+            <p className="text-red-600 dark:text-red-400 text-sm font-medium">{error}</p>
+          </div>
+        )}
       </form>
 
       <div className="mt-4 text-sm text-center text-muted-foreground">

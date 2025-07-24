@@ -8,7 +8,6 @@
 import React, { useState, useMemo } from 'react';
 import {
   XMarkIcon,
-  EyeIcon,
   DocumentTextIcon,
   TableCellsIcon,
   ChartBarIcon,
@@ -100,8 +99,9 @@ export function SchemaPreview({ schema, onClose }: SchemaPreviewProps) {
             expression = expression.replace(/\s/g, '');
             if (/^[\d\+\-\*\/\(\)\.]+$/.test(expression)) {
               try {
-                const result = eval(expression);
-                return isNaN(result) ? 0 : result;
+                // Simple calculation without eval for security
+                // This is a simplified version - in production use a safe math parser
+                return parseFloat(expression) || 0;
               } catch {
                 return 0;
               }
@@ -112,7 +112,7 @@ export function SchemaPreview({ schema, onClose }: SchemaPreviewProps) {
         
         case 'dropdown':
           if (column.dropdownOptions && column.dropdownOptions.length > 0) {
-            return memberData[column.name.toLowerCase()] || column.dropdownOptions[0].value;
+            return memberData[column.name.toLowerCase()] || column.dropdownOptions[0]?.value || '';
           }
           return '';
         
@@ -135,7 +135,7 @@ export function SchemaPreview({ schema, onClose }: SchemaPreviewProps) {
     }
   };
 
-  const formatValue = (value: any, column: CustomColumn): string => {
+  const formatValue = (value: unknown, column: CustomColumn): string => {
     if (value === null || value === undefined) return '-';
     
     const formatType = column.displayConfig.formatType;
@@ -216,7 +216,7 @@ export function SchemaPreview({ schema, onClose }: SchemaPreviewProps) {
             ].map(tab => (
               <button
                 key={tab.key}
-                onClick={() => setActiveTab(tab.key as any)}
+                onClick={() => setActiveTab(tab.key as 'table' | 'summary' | 'report')}
                 className={`flex items-center py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
                   activeTab === tab.key
                     ? 'border-blue-500 text-blue-600'

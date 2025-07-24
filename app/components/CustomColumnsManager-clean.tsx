@@ -6,7 +6,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
+import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { 
   PlusIcon, 
   PencilIcon, 
@@ -19,7 +19,6 @@ import {
 } from '@heroicons/react/24/outline';
 
 import { 
-  CustomColumn, 
   GroupCustomSchema, 
 } from '@/app/types/custom-columns';
 
@@ -112,7 +111,7 @@ export function CustomColumnsManager({
   }, [schema, onSchemaChange]);
 
   // Handle column reordering
-  const handleDragEnd = useCallback((result: any) => {
+  const handleDragEnd = useCallback((result: DropResult) => {
     if (!result.destination) return;
 
     const items = Array.from(schema.columns);

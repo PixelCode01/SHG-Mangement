@@ -4,7 +4,7 @@ import { authMiddleware } from '@/app/lib/auth';
 // GET - Fetch custom schema for a group
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     // Check authentication first
@@ -16,7 +16,8 @@ export async function GET(
     }
     
     const { session } = authResult;
-    const groupId = params.id;
+    const resolvedParams = await params;
+    const groupId = resolvedParams.id;
     
     // For now, return a default schema since we don't have persistence yet
     const defaultSchema = {
@@ -47,7 +48,7 @@ export async function GET(
 // POST - Save custom schema for a group
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     // Check authentication first
@@ -59,7 +60,8 @@ export async function POST(
     }
     
     const { session } = authResult;
-    const groupId = params.id;
+    const resolvedParams = await params;
+    const groupId = resolvedParams.id;
     const schema = await request.json();
     
     // Validate the schema structure
@@ -93,7 +95,7 @@ export async function POST(
 // PUT - Update custom schema for a group
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   return POST(request, { params });
 }
@@ -101,7 +103,7 @@ export async function PUT(
 // DELETE - Delete custom schema for a group
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     // Check authentication first
@@ -112,7 +114,8 @@ export async function DELETE(
       return authResult;
     }
     
-    const groupId = params.id;
+    const resolvedParams = await params;
+    const groupId = resolvedParams.id;
     
     // For now, we'll simulate deleting the schema
     console.log('Custom schema deleted for group:', groupId);

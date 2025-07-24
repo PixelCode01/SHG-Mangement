@@ -59,32 +59,6 @@ export default function RootLayout({
                   <div className="text-muted text-sm mb-4 md:mb-0">
                     SHG Management © {new Date().getFullYear()}
                   </div>
-                  <div className="flex space-x-4">
-                    <a
-                      href="#"
-                      className="text-sm text-muted hover:text-primary transition-colors"
-                    >
-                      About
-                    </a>
-                    <a
-                      href="#"
-                      className="text-sm text-muted hover:text-primary transition-colors"
-                    >
-                      Terms
-                    </a>
-                    <a
-                      href="#"
-                      className="text-sm text-muted hover:text-primary transition-colors"
-                    >
-                      Privacy
-                    </a>
-                    <a
-                      href="#"
-                      className="text-sm text-muted hover:text-primary transition-colors"
-                    >
-                      Contact
-                    </a>
-                  </div>
                 </div>
               </footer>
             </div>

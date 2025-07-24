@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
 
     console.log('[DEBUG] Identifier type:', { isEmail, isPhone });
 
-    let userFromDb = null;
+    let userFromDb: any = null;
 
     if (isEmail) {
       userFromDb = await prisma.user.findFirst({
