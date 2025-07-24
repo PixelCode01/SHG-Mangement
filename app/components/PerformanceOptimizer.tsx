@@ -7,16 +7,53 @@ import { useEffect } from 'react';
  */
 export default function PerformanceOptimizer() {
   useEffect(() => {
-    // Preload critical resources only when needed
-    const preloadCriticalResources = () => {
-      // Only preload in production to avoid development warnings
-      if (process.env.NODE_ENV === 'production') {
-        // Add any critical resource preloading here
-        // Example: prefetch important API routes
-        if ('serviceWorker' in navigator) {
-          // Register service worker for caching if needed
+    // Remove or disable aggressive preloading to prevent warnings
+    const optimizeResourceLoading = () => {
+      // Remove any unused preload links that might be causing warnings
+      const preloadLinks = document.querySelectorAll('link[rel="preload"]');
+      preloadLinks.forEach(link => {
+        const href = link.getAttribute('href');
+        // Check if the resource is actually being used
+        if (href && !isResourceInUse(href)) {
+          // Add 'as' attribute if missing to prevent warnings
+          if (!link.getAttribute('as')) {
+            link.setAttribute('as', getResourceType(href));
+          }
         }
+      });
+    };
+
+    // Helper function to determine if a resource is being used
+    const isResourceInUse = (href: string): boolean => {
+      // Check for font files
+      if (href.includes('.woff') || href.includes('.woff2')) {
+        return document.fonts.check('1em ' + getFontFamilyFromUrl(href));
       }
+      // Check for CSS files
+      if (href.includes('.css')) {
+        return document.querySelector(`link[href="${href}"]`) !== null;
+      }
+      // Check for JS files
+      if (href.includes('.js')) {
+        return document.querySelector(`script[src="${href}"]`) !== null;
+      }
+      return true; // Default to true to be safe
+    };
+
+    // Helper function to get font family from URL
+    const getFontFamilyFromUrl = (url: string): string => {
+      if (url.includes('geist-sans')) return 'Geist Sans';
+      if (url.includes('geist-mono')) return 'Geist Mono';
+      return 'sans-serif';
+    };
+
+    // Helper function to determine resource type for 'as' attribute
+    const getResourceType = (href: string): string => {
+      if (href.includes('.woff') || href.includes('.woff2') || href.includes('.ttf')) return 'font';
+      if (href.includes('.css')) return 'style';
+      if (href.includes('.js')) return 'script';
+      if (href.includes('.png') || href.includes('.jpg') || href.includes('.webp')) return 'image';
+      return 'fetch';
     };
 
     // Optimize images and other resources
@@ -69,7 +106,8 @@ export default function PerformanceOptimizer() {
       console.error = originalConsole.error; // Keep errors
     }
 
-    preloadCriticalResources();
+    // Initialize optimizations
+    optimizeResourceLoading();
     optimizeResources();
 
     window.addEventListener('scroll', handleScroll, { passive: true });

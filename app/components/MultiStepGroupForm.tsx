@@ -19,35 +19,16 @@ import { CollectionFrequency } from '@prisma/client';
 
 // Component for real-time Group Social calculation that updates automatically
 function GroupSocialCalculation({ watchedMembers, watchedGroupSocialAmountPerFamilyMember, watch }) {
-  // DIAGNOSTIC LOG 3: Check if inline calculation is re-executing
-  console.log('🔍 DIAGNOSTIC 3 - INLINE CALC EXECUTION:');
-  console.log('   Inline calc timestamp:', new Date().toISOString());
-  
-  // FIXED: Use direct watch calls for individual family member counts to ensure real-time updates
   const memberFieldsData = watchedMembers || [];
   let totalFamilyMembers = 0;
   
-  // Calculate family members using direct watch calls for each member
+  // Calculate family members using direct watch calls for each member to ensure real-time updates
   memberFieldsData.forEach((member, index) => {
     const familySize = watch(`members.${index}.familyMembersCount`) || 1;
     totalFamilyMembers += familySize;
   });
   
   const calculatedAmount = ((watchedGroupSocialAmountPerFamilyMember || 0) * totalFamilyMembers);
-  
-  // DEBUG LOG - Enhanced inline calculation with direct watch
-  console.log('🎯 Group Social inline calc (DIRECT WATCH):');
-  console.log('   memberFieldsData count:', memberFieldsData.length);
-  console.log('   Direct watch family details:', memberFieldsData.map((m, idx) => ({ 
-    index: idx, 
-    name: m.name, 
-    directWatchFamilySize: watch(`members.${idx}.familyMembersCount`),
-    memberObjectFamilySize: m.familyMembersCount
-  })));
-  console.log('   totalFamilyMembers (direct watch):', totalFamilyMembers);
-  console.log('   watchedGroupSocialAmountPerFamilyMember:', watchedGroupSocialAmountPerFamilyMember);
-  console.log('   calculatedAmount (direct watch):', calculatedAmount);
-  console.log('   EXPECTED CHANGE: Should update immediately when family sizes change');
   
   return <>₹{calculatedAmount.toFixed(2)}</>;
 }
@@ -3131,95 +3112,32 @@ The PDF may contain scanned images or use an unsupported format.
   const watchedLoanInsurancePreviousBalance = watch('loanInsurancePreviousBalance');
   const watchedIncludeDataTillCurrentPeriod = watch('includeDataTillCurrentPeriod');
 
-  // Watch individual family member counts to ensure Step4 re-renders when they change
-  const watchedFamilyMemberCounts = (watchedMembers || []).map((_, index) => 
-    watch(`members.${index}.familyMembersCount`)
+  // Watch individual family member counts and loan amounts for efficient updates
+  const watchedFamilyMemberCounts = useMemo(() => 
+    (watchedMembers || []).map((member) => member.familyMembersCount || 1), 
+    [watchedMembers]
   );
 
-  // Watch individual loan amounts to ensure Step4 re-renders when they change
-  const watchedLoanAmounts = (watchedMembers || []).map((_, index) => 
-    watch(`members.${index}.currentLoanAmount`)
+  const watchedLoanAmounts = useMemo(() => 
+    (watchedMembers || []).map((member) => member.currentLoanAmount || 0), 
+    [watchedMembers]
   );
 
-  // DEBUG EFFECT - Monitor all watch variable changes
-  useEffect(() => {
-    // DIAGNOSTIC LOG 4: Check if component re-renders when watch variables change
-    console.log('🔍 DIAGNOSTIC 4 - COMPONENT RE-RENDER:');
-    console.log('   Component re-render timestamp:', new Date().toISOString());
-    console.log('🔍 WATCH VARIABLES UPDATE:');
-    console.log('   watchedMembers length:', (watchedMembers || []).length);
-    console.log('   watchedMembers detail:', watchedMembers?.map(m => ({ 
-      name: m.name, 
-      familySize: m.familyMembersCount, 
-      loanAmount: m.currentLoanAmount 
-    })));
-    console.log('   watchedGroupSocialEnabled:', watchedGroupSocialEnabled);
-    console.log('   watchedGroupSocialAmountPerFamilyMember:', watchedGroupSocialAmountPerFamilyMember);
-    console.log('   watchedLoanInsuranceEnabled:', watchedLoanInsuranceEnabled);
-    console.log('   watchedLoanInsurancePercent:', watchedLoanInsurancePercent);
-    console.log('   watchedGroupSocialPreviousBalance:', watchedGroupSocialPreviousBalance);
-    console.log('   watchedLoanInsurancePreviousBalance:', watchedLoanInsurancePreviousBalance);
-  }, [watchedMembers, watchedGroupSocialEnabled, watchedGroupSocialAmountPerFamilyMember, 
-      watchedLoanInsuranceEnabled, watchedLoanInsurancePercent, 
-      watchedGroupSocialPreviousBalance, watchedLoanInsurancePreviousBalance]);
+  // Removed excessive debug logging that was causing performance issues
 
   // Simple approach: Remove unnecessary complexity and let React handle re-renders naturally
 
   const Step4 = useMemo(() => {
-    const memberFieldsData = watchedMembers || []; // Use watched value
+    const memberFieldsData = watchedMembers || [];
     const currentCashInHand = Number(watchedCashInHand) || 0;
     const currentBalanceInBank = Number(watchedBalanceInBank) || 0;
     const globalShareAmount = Number(watchedGlobalShareAmount) || 0;
     const interestRate = Number(watchedInterestRate) || 0;
     const monthlyContribution = Number(watchedMonthlyContribution) || 0;
     
-    // DIAGNOSTIC LOG 1: Check if Step4 useMemo is re-executing when fields change
-    console.log('🔍 DIAGNOSTIC 1 - Step4 useMemo RE-EXECUTION:');
-    console.log('   Timestamp:', new Date().toISOString());
-    console.log('   memberFieldsData length:', memberFieldsData.length);
-    
-    // DIAGNOSTIC LOG 2: Test direct watch calls inside useMemo
-    let diagnosticTotalFamilyMembers = 0;
-    memberFieldsData.forEach((member, index) => {
-      const directWatchValue = watch(`members.${index}.familyMembersCount`);
-      const memberObjectValue = member.familyMembersCount;
-      diagnosticTotalFamilyMembers += (directWatchValue || 1);
-      console.log(`   Member ${index} DIAGNOSTIC:`, {
-        name: member.name,
-        directWatch: directWatchValue,
-        memberObject: memberObjectValue,
-        difference: directWatchValue !== memberObjectValue
-      });
-    });
-    console.log('   DIAGNOSTIC totalFamilyMembers (inside useMemo):', diagnosticTotalFamilyMembers);
-    
-    // DEBUG LOGS - Add comprehensive logging to validate assumptions
-    console.log('🔍 Step4 useMemo triggered with dependencies:');
-    console.log('   watchedMembers:', memberFieldsData);
-    console.log('   watchedGroupSocialEnabled:', watchedGroupSocialEnabled);
-    console.log('   watchedGroupSocialAmountPerFamilyMember:', watchedGroupSocialAmountPerFamilyMember);
-    console.log('   watchedLoanInsuranceEnabled:', watchedLoanInsuranceEnabled);
-    console.log('   watchedLoanInsurancePercent:', watchedLoanInsurancePercent);
-    console.log('   watchedGroupSocialPreviousBalance:', watchedGroupSocialPreviousBalance);
-    console.log('   watchedLoanInsurancePreviousBalance:', watchedLoanInsurancePreviousBalance);
-    
     // Calculate total loan amount from all members
-    const totalLoanAmount = memberFieldsData.reduce((sum: number, member, index) => {
-      // Safely extract and convert the loan amount
+    const totalLoanAmount = memberFieldsData.reduce((sum: number, member) => {
       const loanAmount = typeof member.currentLoanAmount === 'number' ? member.currentLoanAmount : 0;
-      
-      // DEBUG: Log the first few member objects to understand the structure
-      if (index < 3) {
-        console.log(`🔍 Member ${index} structure:`, {
-          name: member.name,
-          memberId: member.memberId,
-          currentLoanAmount: member.currentLoanAmount,
-          currentShare: member.currentShare,
-          familyMembersCount: member.familyMembersCount,
-          fullObject: member
-        });
-      }
-      
       return sum + loanAmount;
     }, 0);
     
@@ -3248,15 +3166,6 @@ The PDF may contain scanned images or use an unsupported format.
     const loanInsurancePreviousBalance = Number(watchedLoanInsurancePreviousBalance) || 0;
     const totalLoanInsuranceFund = calculatedLoanInsuranceAmount + loanInsurancePreviousBalance;
 
-    // DEBUG LOGS - Log calculated values
-    console.log('💰 Calculated values in useMemo:');
-    console.log('   totalLoanAmount:', totalLoanAmount);
-    console.log('   totalFamilyMembers:', totalFamilyMembers);
-    console.log('   calculatedGroupSocialAmount:', calculatedGroupSocialAmount);
-    console.log('   totalGroupSocialFund:', totalGroupSocialFund);
-    console.log('   calculatedLoanInsuranceAmount:', calculatedLoanInsuranceAmount);
-    console.log('   totalLoanInsuranceFund:', totalLoanInsuranceFund);
-
     // Calculate total group standing
     const baseGroupStanding = roundToTwoDecimals(totalLoanAmount + currentCashInHand + currentBalanceInBank);
     const finalGroupStanding = subtractLIandGS ? 
@@ -3267,7 +3176,24 @@ The PDF may contain scanned images or use an unsupported format.
     const totalGroupStanding = finalGroupStanding;
 
     return (
-      <div className="card p-6">
+      <div className="card p-6 relative">
+        {/* Loading overlay for Step 4 */}
+        {isLoading && (
+          <div className="absolute inset-0 bg-white bg-opacity-75 dark:bg-gray-800 dark:bg-opacity-75 flex items-center justify-center z-10 rounded-lg">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
+              <div className="text-lg font-medium text-gray-900 dark:text-gray-100">
+                {recordCreationStatus || (isEditing ? 'Updating Group...' : 'Creating Group...')}
+              </div>
+              {recordCreationError && (
+                <div className="mt-2 text-sm text-amber-600 dark:text-amber-400">
+                  {recordCreationError}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
             Step 4: Review & Create
@@ -3994,7 +3920,7 @@ The PDF may contain scanned images or use an unsupported format.
                   <span className="text-gray-700 dark:text-gray-300">Total GS Fund:</span>
                   <span className="font-medium text-gray-900 dark:text-gray-100">
                     ₹{(() => {
-                      // FIXED: Real-time calculation for Total GS Fund using direct watch
+                      // Real-time calculation for Total GS Fund using direct watch
                       const memberFieldsData = watchedMembers || [];
                       let totalFamilyMembers = 0;
                       
@@ -4009,14 +3935,6 @@ The PDF may contain scanned images or use an unsupported format.
                       const groupSocialPreviousBalance = Number(watchedGroupSocialPreviousBalance) || 0;
                       const totalGSFund = calculatedGroupSocialAmount + groupSocialPreviousBalance;
                       
-                      // DEBUG LOG - Summary GS calculation with direct watch
-                      console.log('🎯 Total GS Fund summary calc (DIRECT WATCH):');
-                      console.log('   totalFamilyMembers (direct watch summary):', totalFamilyMembers);
-                      console.log('   groupSocialPerFamily (summary):', groupSocialPerFamily);
-                      console.log('   calculatedGroupSocialAmount (direct watch summary):', calculatedGroupSocialAmount);
-                      console.log('   groupSocialPreviousBalance (summary):', groupSocialPreviousBalance);
-                      console.log('   totalGSFund (direct watch summary):', totalGSFund);
-                      
                       return totalGSFund.toFixed(2);
                     })()}
                   </span>
@@ -4026,27 +3944,7 @@ The PDF may contain scanned images or use an unsupported format.
                 <div className="flex justify-between">
                   <span className="text-gray-700 dark:text-gray-300">Total LI Fund:</span>
                   <span className="font-medium text-gray-900 dark:text-gray-100">
-                    ₹{(() => {
-                      // Real-time calculation for Total LI Fund
-                      const currentMembers = watchedMembers || [];
-                      const realtimeTotalLoanAmount = currentMembers.reduce((sum, member) => {
-                        return sum + (Number(member.currentLoanAmount) || 0);
-                      }, 0);
-                      const loanInsurancePercent = Number(watchedLoanInsurancePercent) || 0;
-                      const calculatedLoanInsuranceAmount = realtimeTotalLoanAmount * (loanInsurancePercent / 100);
-                      const loanInsurancePreviousBalance = Number(watchedLoanInsurancePreviousBalance) || 0;
-                      const totalLIFund = calculatedLoanInsuranceAmount + loanInsurancePreviousBalance;
-                      
-                      // DEBUG LOG - Summary LI calculation
-                      console.log('🎯 Total LI Fund summary calc (REAL-TIME):');
-                      console.log('   realtimeTotalLoanAmount (summary):', realtimeTotalLoanAmount);
-                      console.log('   loanInsurancePercent (summary):', loanInsurancePercent);
-                      console.log('   calculatedLoanInsuranceAmount (summary):', calculatedLoanInsuranceAmount);
-                      console.log('   loanInsurancePreviousBalance (summary):', loanInsurancePreviousBalance);
-                      console.log('   totalLIFund (summary):', totalLIFund);
-                      
-                      return totalLIFund.toFixed(2);
-                    })()}
+                    ₹{totalLoanInsuranceFund.toFixed(2)}
                   </span>
                 </div>
               )}
@@ -4055,7 +3953,7 @@ The PDF may contain scanned images or use an unsupported format.
                 <span className="text-green-900 dark:text-green-100">Total Group Standing:</span>
                 <span className="text-green-900 dark:text-green-100">
                   ₹{(() => {
-                    // FIXED: Real-time calculation for Total Group Standing using direct watch
+                    // Real-time calculation for Total Group Standing using direct watch
                     const memberFieldsData = watchedMembers || [];
                     const currentCashInHandRT = Number(watchedCashInHand) || 0;
                     const currentBalanceInBankRT = Number(watchedBalanceInBank) || 0;
@@ -4091,17 +3989,6 @@ The PDF may contain scanned images or use an unsupported format.
                       (baseGroupStanding - totalGSFundRT - totalLIFundRT) : 
                       baseGroupStanding;
                     
-                    // DEBUG LOG - Summary Group Standing calculation with direct watch
-                    console.log('🎯 Total Group Standing summary calc (DIRECT WATCH):');
-                    console.log('   realtimeTotalLoanAmount (direct watch standing):', realtimeTotalLoanAmount);
-                    console.log('   currentCashInHandRT (standing):', currentCashInHandRT);
-                    console.log('   currentBalanceInBankRT (standing):', currentBalanceInBankRT);
-                    console.log('   totalFamilyMembers (direct watch standing):', totalFamilyMembers);
-                    console.log('   totalGSFundRT (direct watch standing):', totalGSFundRT);
-                    console.log('   totalLIFundRT (direct watch standing):', totalLIFundRT);
-                    console.log('   subtractLIandGS (standing):', subtractLIandGS);
-                    console.log('   finalGroupStanding (direct watch standing):', finalGroupStanding);
-                    
                     return finalGroupStanding.toFixed(2);
                   })()}
                 </span>
@@ -4112,7 +3999,7 @@ The PDF may contain scanned images or use an unsupported format.
         </div>
       </div>
     );
-  }, [watchedCashInHand, watchedBalanceInBank, watchedGlobalShareAmount, watchedMembers, collectionFrequency, watchedInterestRate, watchedMonthlyContribution, watchedGroupSocialEnabled, watchedGroupSocialAmountPerFamilyMember, watchedLoanInsuranceEnabled, watchedLoanInsurancePercent, watchedGroupSocialPreviousBalance, watchedLoanInsurancePreviousBalance, watchedIncludeDataTillCurrentPeriod, control, errors, memberFields, getShareLabel, setValue, watch, subtractLIandGS, watchedFamilyMemberCounts, watchedLoanAmounts]); // Added individual field watches to ensure re-render when values change
+  }, [watchedCashInHand, watchedBalanceInBank, watchedGlobalShareAmount, watchedMembers, collectionFrequency, watchedInterestRate, watchedMonthlyContribution, watchedGroupSocialEnabled, watchedGroupSocialAmountPerFamilyMember, watchedLoanInsuranceEnabled, watchedLoanInsurancePercent, watchedGroupSocialPreviousBalance, watchedLoanInsurancePreviousBalance, watchedIncludeDataTillCurrentPeriod, control, errors, memberFields, getShareLabel, setValue, watch, subtractLIandGS]); // Re-added watch for real-time updates
 
   // Duplicate function removed - using definition above
 
