@@ -148,3 +148,4 @@ test-*.mjs
 # Log files
 *.log
 pdf_output.log
+.ssh/
