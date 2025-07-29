@@ -227,6 +227,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  let requestedMemberCount = 0; // For error logging
+  
   try {
     // Check authentication first
     const authResult = await authMiddleware(request);
@@ -286,6 +288,7 @@ export async function POST(request: NextRequest) {
     let userMemberId = session.user.memberId;
     
     const json = await request.json();
+    requestedMemberCount = json?.members?.length || 0; // Store for error logging
 
     // Validate input data
     const validationResult = createGroupSchema.safeParse(json);
@@ -375,6 +378,7 @@ export async function POST(request: NextRequest) {
 
     const memberIds = membersData.map(m => m.memberId);
     
+    // Pre-validate members exist before starting the transaction
     const existingMembers = await prisma.member.findMany({
         where: { id: { in: memberIds } },
         select: { id: true }
@@ -388,28 +392,41 @@ export async function POST(request: NextRequest) {
         );
     }
 
+    // Generate group ID outside of transaction to reduce transaction time
     const now = new Date();
     const yearMonth = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
-    const groupId = await prisma.$transaction(async (tx) => {
-        const lastGroup = await tx.group.findFirst({
-            where: { groupId: { startsWith: `GRP-${yearMonth}-` } },
-            orderBy: { createdAt: 'desc' },
-            select: { groupId: true }
-        });
-        let sequentialNumber = 1;
-        if (lastGroup?.groupId) {
-            try {
-                const groupIdParts = lastGroup.groupId.split('-');
-                if (groupIdParts.length >= 3 && groupIdParts[2]) {
-                    const lastNumber = parseInt(groupIdParts[2]);
-                    if (!isNaN(lastNumber)) sequentialNumber = lastNumber + 1;
-                }
-            } catch (e) {
-                console.error("Error parsing last group ID sequence:", e);
-            }
-        }
-        return `GRP-${yearMonth}-${String(sequentialNumber).padStart(3, '0')}`;
-    });
+    
+    let groupId: string;
+    try {
+      groupId = await prisma.$transaction(async (tx) => {
+          const lastGroup = await tx.group.findFirst({
+              where: { groupId: { startsWith: `GRP-${yearMonth}-` } },
+              orderBy: { createdAt: 'desc' },
+              select: { groupId: true }
+          });
+          let sequentialNumber = 1;
+          if (lastGroup?.groupId) {
+              try {
+                  const groupIdParts = lastGroup.groupId.split('-');
+                  if (groupIdParts.length >= 3 && groupIdParts[2]) {
+                      const lastNumber = parseInt(groupIdParts[2]);
+                      if (!isNaN(lastNumber)) sequentialNumber = lastNumber + 1;
+                  }
+              } catch (e) {
+                  console.error("Error parsing last group ID sequence:", e);
+              }
+          }
+          return `GRP-${yearMonth}-${String(sequentialNumber).padStart(3, '0')}`;
+      }, {
+        timeout: 10000, // Short timeout for ID generation
+      });
+    } catch (error) {
+      console.error('Error generating group ID:', error);
+      return NextResponse.json(
+        { error: 'Failed to generate group ID. Please try again.' },
+        { status: 500 }
+      );
+    }
 
     const result = await prisma.$transaction(async (tx) => {
       // If the user doesn't have a memberId or selected a different leader than their current linked member,
@@ -482,9 +499,9 @@ export async function POST(request: NextRequest) {
         
         // Handle tier rules for TIER_BASED rule
         if (lateFineRule.ruleType === 'TIER_BASED' && lateFineRule.tierRules && lateFineRule.tierRules.length > 0) {
-          // Create tier rules for the new rule
-          for (const tier of lateFineRule.tierRules) {
-            await tx.lateFineRuleTier.create({
+          // Create tier rules for the new rule in parallel for better performance
+          const tierCreationPromises = lateFineRule.tierRules.map(tier => 
+            tx.lateFineRuleTier.create({
               data: {
                 lateFineRuleId: newRule.id,
                 startDay: tier.startDay,
@@ -492,8 +509,9 @@ export async function POST(request: NextRequest) {
                 amount: tier.amount,
                 isPercentage: tier.isPercentage
               }
-            });
-          }
+            })
+          );
+          await Promise.all(tierCreationPromises);
         }
       }
 
@@ -509,14 +527,18 @@ export async function POST(request: NextRequest) {
           })),
         });
         
-        // Update family members count for each member if provided
-        for (const memberInfo of membersData) {
-          if (memberInfo.familyMembersCount !== undefined) {
-            await tx.member.update({
+        // Optimize family members count updates by batching them in parallel
+        const familyCountUpdates = membersData
+          .filter(memberInfo => memberInfo.familyMembersCount !== undefined)
+          .map(memberInfo => 
+            tx.member.update({
               where: { id: memberInfo.memberId },
               data: { familyMembersCount: memberInfo.familyMembersCount }
-            });
-          }
+            })
+          );
+        
+        if (familyCountUpdates.length > 0) {
+          await Promise.all(familyCountUpdates);
         }
       }
 
@@ -526,7 +548,7 @@ export async function POST(request: NextRequest) {
 
       return group;
     }, {
-      timeout: 30000, // 30 seconds timeout for large groups
+      timeout: 120000, // Increased to 120 seconds timeout for Vercel deployment
     });
 
     // Add permissions for the current user to manage this group using the helper function
@@ -547,12 +569,31 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     const typedError = error as Error & { code?: string; meta?: { target?: string[] } };
     console.error('Error creating group and memberships:', typedError);
+    
+    // Handle specific Prisma timeout error
+    if (typedError.code === 'P2028') {
+      console.error('Transaction timeout occurred:', {
+        message: typedError.message,
+        membersCount: requestedMemberCount,
+        timestamp: new Date().toISOString()
+      });
+      return NextResponse.json(
+        { 
+          error: 'Group creation is taking longer than expected in the production environment',
+          details: 'This usually happens with large member lists. Please try with fewer members or contact support.',
+          suggestion: 'Try creating the group with fewer members initially, then add more members later.'
+        },
+        { status: 408 } // Request Timeout
+      );
+    }
+    
     if (typedError.code === 'P2002' && typedError.meta?.target?.includes('groupId')) {
         return NextResponse.json(
             { error: 'Failed to generate unique group ID due to conflict. Please try again.' },
             { status: 500 }
         );
     }
+    
     return NextResponse.json(
       { error: 'Failed to create group', details: typedError.message || 'Internal Server Error' },
       { status: 500 }
